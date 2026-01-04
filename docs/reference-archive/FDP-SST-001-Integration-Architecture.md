@@ -12,7 +12,7 @@
 
 ## 1. Executive Summary
 
-This document defines the **integration architecture** between the Fast Data Plane (FDP) ECS engine and the Shared Simulation State (SST) layer for B-One NG.
+This document defines the **integration architecture** between the Fast Data Plane (FDP) ECS engine and the Shared Simulation State (SST) layer for ModuleHost.
 
 **Core Architectural Decision:**
 The **ModuleHost Kernel owns the FDP EntityRepository**. Modules are plugins that register ComponentSystems with FDP, enabling flexible node configurations from physics-heavy simulators to passive monitoring stations.
@@ -972,11 +972,11 @@ public class ModuleHostKernel
 
 | FDP Component (Tier 2) | DDS Topic | Update Frequency |
 |------------------------|-----------|------------------|
-| `PositionGeodetic` | `BDC.SST.Position` | 30-60 Hz |
-| `IdentityDescriptor` | `BDC.SST.Identity` | On change |
-| `StatusDescriptor` | `BDC.SST.Status` | On change |
-| `SensorDescriptor` | `BDC.SST.Sensor` | 10 Hz |
-| `DamageDescriptor` | `BDC.SST.Damage` | On event |
+| `PositionGeodetic` | `SST.Position` | 30-60 Hz |
+| `IdentityDescriptor` | `SST.Identity` | On change |
+| `StatusDescriptor` | `SST.Status` | On change |
+| `SensorDescriptor` | `SST.Sensor` | 10 Hz |
+| `DamageDescriptor` | `SST.Damage` | On event |
 
 ### 6.2 DDS Gateway Implementation (SSTModule)
 
@@ -1604,7 +1604,7 @@ public struct ModuleDefinition
 
 ## 12. Conclusion
 
-This architecture provides a **unified, flexible, and performant** foundation for B-One NG by:
+This architecture provides a **unified, flexible, and performant** foundation for ModuleHost by:
 
 1. **Leveraging FDP's strengths** (determinism, recording, phases) instead of reinventing
 2. **Maintaining flexibility** through host-centric ownership (physics-optional nodes)

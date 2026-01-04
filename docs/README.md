@@ -1,4 +1,4 @@
-# B-One NG Module Host - Documentation
+# Module Host - Documentation
 
 **Clean, authoritative documentation set for implementation.**
 
@@ -39,7 +39,7 @@ Contains everything you need:
 | Document | Purpose |
 |----------|---------|
 | **[ADR-001-Snapshot-on-Demand.md](ADR-001-Snapshot-on-Demand.md)** | Architectural Decision: SoD vs COW |
-| **[B-One-FDP-Data-Lake.md](B-One-FDP-Data-Lake.md)** | SoD rationale whitepaper |
+| **[FDP-Data-Lake.md](FDP-Data-Lake.md)** | SoD rationale whitepaper |
 | **[detailed-design-overview.md](detailed-design-overview.md)** | All 9 interfaces + ~25 classes |
 | **[design-visual-reference.md](design-visual-reference.md)** | Diagrams, flows, memory layouts |
 
@@ -81,7 +81,7 @@ These docs provide **historical context** but are **NOT for implementation**:
 ### For Understanding Design Decisions:
 
 1. **Why SoD?** → [ADR-001-Snapshot-on-Demand.md](ADR-001-Snapshot-on-Demand.md)
-2. **SoD Deep Dive?** → [B-One-FDP-Data-Lake.md](B-One-FDP-Data-Lake.md)
+2. **SoD Deep Dive?** → [FDP-Data-Lake.md](FDP-Data-Lake.md)
 3. **Event History?** → [FDP-EventsInSnapshots.md](FDP-EventsInSnapshots.md)
 4. **Event Scheduling?** → [FDP-module-scheduling-support.md](FDP-module-scheduling-support.md)
 
@@ -106,7 +106,7 @@ These docs provide **historical context** but are **NOT for implementation**:
 
 **If you are reviewing:**
 - Architecture: [ADR-001-Snapshot-on-Demand.md](ADR-001-Snapshot-on-Demand.md)
-- Rationale: [B-One-FDP-Data-Lake.md](B-One-FDP-Data-Lake.md)
+- Rationale: [FDP-Data-Lake.md](FDP-Data-Lake.md)
 - Visuals: [design-visual-reference.md](design-visual-reference.md)
 
 **If you need historical context:**
@@ -177,7 +177,7 @@ docs/
 ├── README.md (this file)
 ├── IMPLEMENTATION-SPECIFICATION.md ⭐ MASTER
 ├── ADR-001-Snapshot-on-Demand.md
-├── B-One-FDP-Data-Lake.md
+├── FDP-Data-Lake.md
 ├── detailed-design-overview.md
 ├── design-visual-reference.md
 ├── fdp-api-requirements.md
@@ -186,12 +186,7 @@ docs/
 │
 └── reference-archive/ (original requirements - reference only)
     ├── README.md (explains archive purpose)
-    ├── specification.md
-    ├── specs-addendums1.md
-    ├── sst-rules.md
     ├── FDP-SST-001-Integration-Architecture.md
-    ├── fdp-overview.md
-    ├── b-one-vision.md
     └── drill-clock-sync.md
 ```
 

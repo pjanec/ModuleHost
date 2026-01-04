@@ -1,4 +1,4 @@
-# Detailed Design Overview - B-One NG Module Host
+# Detailed Design Overview - Module Host
 
 **Date:** January 4, 2026  
 **Version:** 2.0 (Hybrid GDB+SoD Architecture)  

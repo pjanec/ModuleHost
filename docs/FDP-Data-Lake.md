@@ -1,8 +1,8 @@
-﻿# **B-One NG Whitepaper \- Part 1: The Paradigm Shift**
+﻿# **ModuleHost Whitepaper \- Part 1: The Paradigm Shift**
 
 For: Lead Developer, Fast Data Plane (FDP)
 
-From: B-One NG Architecture Team
+From: ModuleHost Architecture Team
 
 Date: January 3, 2026
 
@@ -14,7 +14,7 @@ Historically, FDP was conceived as the **high-performance engine** of the simula
 
 The Problem:
 
-In B-One NG, a "Simulator" is just one type of node. We also have:
+In ModuleHost, a "Simulator" is just one type of node. We also have:
 
 * **Monitoring Nodes:** Passive observers that need State (SST) but have zero Physics logic.  
 * **Replay Servers:** Nodes that stream historical data but perform no integration.  
@@ -66,11 +66,11 @@ Key Takeaway for Devs:
 
 You are no longer building a car engine. You are building the chassis. The SimModule provides the engine, the SSTModule provides the radio, and the Host ensures they all bolt onto the chassis correctly.
 
-# **B-One NG Whitepaper \- Part 2: Actors and Roles**
+# **ModuleHost Whitepaper \- Part 2: Actors and Roles**
 
 For: Lead Developer, Fast Data Plane (FDP)
 
-From: B-One NG Architecture Team
+From: ModuleHost Architecture Team
 
 Subject: Defining the Ecosystem
 
@@ -158,7 +158,7 @@ FDP stores data in two tiers based on **Data Type**, not Domain. Logic uses both
 * **Background Modules** watch from the balcony, seeing a **Hybrid Snapshot** composed of Tier 1 Shadow Buffers and Tier 2 Reference Arrays.  
 * 
 
-# **B-One NG Whitepaper \- Part 3: The Execution Model**
+# **ModuleHost Whitepaper \- Part 3: The Execution Model**
 
 For: Lead Developer, Fast Data Plane (FDP)
 
@@ -242,11 +242,11 @@ The Host does NOT clamp this rate.
 * **Background:** Runs on threads asynchronously. Uses Snapshots. Can run at any frequency, decoupled from the simulation rate.  
 * 
 
-# **B-One NG Whitepaper \- Part 4: The Data Concurrency Challenge**
+# **ModuleHost Whitepaper \- Part 4: The Data Concurrency Challenge**
 
 For: Lead Developer, Fast Data Plane (FDP)
 
-From: B-One NG Architecture Team
+From: ModuleHost Architecture Team
 
 Subject: Solving the Reader/Writer Conflict
 
@@ -298,13 +298,13 @@ For Background Modules that need Tier 1 data (e.g. Health, Ammo):
 * **Optimization:** "Dirty Chunk" Tracking.  
 * We only memcpy chunks that have *changed version* since the last snapshot for that specific background consumer.
 
-## **4\. Why This Works for B-One**
+## **4\. Why This Works**
 
 * **Performance:** Array.Clone() is extremely fast. memcpy of dirty chunks is bandwidth-efficient.  
 * **Memory:** We only allocate new memory when data *actually changes*. Unchanged data is shared perfectly.  
 * **Safety:** Relies on standard C\# GC. No manual memory management required.
 
-# **B-One NG Whitepaper \- Part 5: The Tiered Data Strategy**
+# **ModuleHost Whitepaper \- Part 5: The Tiered Data Strategy**
 
 For: Lead Developer, Fast Data Plane (FDP)
 
@@ -376,7 +376,7 @@ The CoordinateTransformSystem:
 * 
 
 
-# **B-One NG Whitepaper \- Part 6: The Snapshot Manager**
+# **ModuleHost Whitepaper \- Part 6: The Snapshot Manager**
 
 For: Lead Developer, Fast Data Plane (FDP)
 
@@ -485,7 +485,7 @@ public interface ISimWorldSnapshot : IDisposable {
     ReadOnlySpan\<T\> GetStructSpan\<T\>(int chunkId) where T : struct;  
 }
 
-# **B-One NG Whitepaper \- Part 7: The Background Workflow**
+# **ModuleHost Whitepaper \- Part 7: The Background Workflow**
 
 For: Lead Developer, Fast Data Plane (FDP)
 
@@ -587,7 +587,7 @@ If the Network Module receives a packet "Spawn Tank ID: 999", it cannot create E
 2. **You provide the Write Queue:** Implement EntityCommandBuffer that is thread-safe for multi-threaded producers.  
 3. **Trust No One:** When processing the Command Buffer, always validate that the entity is still alive and in the expected state.
 
-# **B-One NG Whitepaper \- Part 8: Implementation Checklist**
+# **ModuleHost Whitepaper \- Part 8: Implementation Checklist**
 
 **For:** Lead Developer, Fast Data Plane (FDP)
 

@@ -200,7 +200,7 @@ We need a way for background modules (AI, UI, Analytics) to safely read FDP stat
 
 ## References
 
-- **Whitepaper:** `docs/B-One-FDP-Data-Lake.md` (Part 4: "The Data Concurrency Challenge")
+- **Whitepaper:** `docs/FDP-Data-Lake.md` (Part 4: "The Data Concurrency Challenge")
 - **Updated Spec:** `docs/FDP-SST-001-Integration-Architecture.md` (Section 4)
 - **Original COW Proposal:** FDP-SST-001 Rev 2.0 (Superseded)
 

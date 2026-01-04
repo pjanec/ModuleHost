@@ -1,6 +1,6 @@
 # Implementation Task Cards - Hybrid GDB+SoD Architecture
 
-**Project:** B-One NG Module Host  
+**Project:** Module Host  
 **Sprint Planning:** Week 1-4  
 **Total Story Points:** 89  
 

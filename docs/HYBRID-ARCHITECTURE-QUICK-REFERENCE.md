@@ -266,7 +266,7 @@ See: [MIGRATION-PLAN-Hybrid-Architecture.md](MIGRATION-PLAN-Hybrid-Architecture.
 
 **Original (Archived):**
 - [ADR-001-Snapshot-on-Demand.md](ADR-001-Snapshot-on-Demand.md) - Original SoD decision
-- [B-One-FDP-Data-Lake.md](B-One-FDP-Data-Lake.md) - SoD rationale
+- [FDP-Data-Lake.md](FDP-Data-Lake.md) - SoD rationale
 
 ---
 

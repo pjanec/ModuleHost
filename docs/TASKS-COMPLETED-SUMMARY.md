@@ -83,7 +83,7 @@
 8. ✅ [TASKS-COMPLETED-SUMMARY.md](TASKS-COMPLETED-SUMMARY.md) - Completion summary
 9. ✅ [README.md](README.md) - Navigation index
 10. ✅ [design-visual-reference.md](design-visual-reference.md) - Visual diagrams
-11. ✅ [B-One-FDP-Data-Lake.md](B-One-FDP-Data-Lake.md) - Tiered data strategy
+11. ✅ [FDP-Data-Lake.md](FDP-Data-Lake.md) - Tiered data strategy
 
 ### Archive
 12. ✅ [reference-archive/](reference-archive/) - Original requirements

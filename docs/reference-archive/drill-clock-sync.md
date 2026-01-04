@@ -8,7 +8,7 @@ This document defines the **Software PLL (Phase-Locked Loop)** algorithm used to
 
 | Metadata | Details |
 | :--- | :--- |
-| **Project** | B-One Next Generation |
+| **Project** | ModuleHOst |
 | **Type** | Algorithm Specification (Core) |
 | **Status** | Draft |
 | **Date** | January 2026 |
