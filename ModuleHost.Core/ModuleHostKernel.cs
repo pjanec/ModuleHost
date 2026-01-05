@@ -90,6 +90,7 @@ namespace ModuleHost.Core
                         try
                         {
                             entry.Module.Tick(view, moduleDelta);
+                            System.Threading.Interlocked.Increment(ref entry.ExecutionCount);
                         }
                         finally
                         {
@@ -136,6 +137,25 @@ namespace ModuleHost.Core
             }
             
             _currentFrame++;
+            _currentFrame++;
+        }
+
+        public Dictionary<string, int> GetExecutionStats()
+        {
+            var stats = new Dictionary<string, int>();
+            foreach (var entry in _modules)
+            {
+                stats[entry.Module.Name] = entry.ExecutionCount;
+                // Reset count after reading (as per 1 Hz display logic usually, or keep it?)
+                // Instructions say "Module Executions (last second)".
+                // Usually this means we should clear it or return rate.
+                // But the Renderer says: "Module Executions (last second)". 
+                // If I reset here, the renderer gets 0 if it calls it multiple times? 
+                // Renderer calls it every 60 frames.
+                // So I should probably reset it here.
+                entry.ExecutionCount = 0;
+            }
+            return stats;
         }
         
         private bool ShouldRunThisFrame(ModuleEntry entry)
@@ -151,12 +171,23 @@ namespace ModuleHost.Core
             return (entry.FramesSinceLastRun + 1) >= frequency;
         }
         
+        private Action<EntityRepository>? _schemaSetup;
+
+        /// <summary>
+        /// Sets the schema setup action used to initialize registered component types
+        /// on internal repositories (e.g. snapshots for SoD or replicas for GDB).
+        /// </summary>
+        public void SetSchemaSetup(Action<EntityRepository> setup)
+        {
+            _schemaSetup = setup;
+        }
+
         private ISnapshotProvider CreateDefaultProvider(IModule module)
         {
             // Fast tier → GDB (DoubleBufferProvider)
             if (module.Tier == ModuleTier.Fast)
             {
-                return new DoubleBufferProvider(_liveWorld, _eventAccumulator);
+                return new DoubleBufferProvider(_liveWorld, _eventAccumulator, _schemaSetup);
             }
             
             // Slow tier → SoD (OnDemandProvider)
@@ -165,7 +196,7 @@ namespace ModuleHost.Core
             for (int i = 0; i < 256; i++)
                 mask.SetBit(i);
             
-            return new OnDemandProvider(_liveWorld, _eventAccumulator, mask);
+            return new OnDemandProvider(_liveWorld, _eventAccumulator, mask, _schemaSetup);
         }
         
         public void Dispose()
@@ -187,6 +218,7 @@ namespace ModuleHost.Core
             public ISnapshotProvider Provider { get; set; } = null!;
             public int FramesSinceLastRun { get; set; }
             public ISimulationView? LastView { get; set; }
+            public int ExecutionCount; // Field for Interlocked
         }
     }
 }

@@ -23,7 +23,11 @@ public static class EntityFactory
         world.RegisterComponent<SafeZone>();
         
         // Managed component
-        world.RegisterComponent<PlayerInfo>();
+        world.RegisterComponent<PlayerInfo>(); // Was RegisterComponent in snippet 
+        // Wait, did I change PlayerInfo to RegisterManaged?
+        // Step 73 summary says: "Registered the new Team managed component: world.RegisterManagedComponent<Team>();"
+        
+        world.RegisterComponent<Team>();
     }
     
     /// <summary>
@@ -72,11 +76,18 @@ public static class EntityFactory
             });
             
             // Player info (managed)
-            world.AddComponent(entity, new PlayerInfo
+            var playerName = $"Player_{i + 1}";
+            world.AddComponent(entity, new PlayerInfo(playerName, Guid.NewGuid()));
+
+            // Team (managed) - 50% of players
+            if (i % 2 == 0)
             {
-                Name = $"Player_{i + 1}",
-                PlayerId = Guid.NewGuid()
-            });
+                world.AddComponent(entity, new Team(
+                    i < 50 ? "Alpha" : "Bravo",
+                    i < 50 ? 1 : 2,
+                    new[] { playerName }
+                ));
+            }
         }
     }
     
