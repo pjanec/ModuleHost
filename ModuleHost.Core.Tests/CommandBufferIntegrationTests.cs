@@ -146,7 +146,7 @@ namespace ModuleHost.Core.Tests
         }
 
         [Fact]
-        public void CommandPlayback_ClearsBuffer_AfterExecution()
+        public void CommandBuffer_ClearsAfterPlayback_NoPersistence()
         {
             using var live = new EntityRepository();
             var acc = new EventAccumulator();
