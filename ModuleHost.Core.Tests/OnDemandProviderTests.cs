@@ -18,7 +18,7 @@ namespace ModuleHost.Core.Tests
         private int GetPoolCount(OnDemandProvider provider)
         {
             var field = typeof(OnDemandProvider).GetField("_pool", BindingFlags.NonPublic | BindingFlags.Instance);
-            var pool = (ConcurrentStack<EntityRepository>)field.GetValue(provider);
+            var pool = (ConcurrentStack<EntityRepository>)field!.GetValue(provider)!;
             return pool.Count;
         }
 
@@ -141,16 +141,6 @@ namespace ModuleHost.Core.Tests
             
             // Verification:
             // Even if components are missing, the entity should exist.
-            var q = repo.Query().Build();
-            bool found = false;
-            // foreach(var ent in q) {
-            //     found = true;
-            //     // Check mask?
-            //     // Provide helper to check component mask?
-            //     // IsAlive checks exist.
-            // }
-            // Assert.True(found);
-            
             Assert.True(repo.EntityCount > 0);
             
             // I'll skip detailed component check if I can't guarantee registration.

@@ -18,13 +18,13 @@ namespace ModuleHost.Core.Tests
         private int GetRefCount(SharedSnapshotProvider provider)
         {
             var field = typeof(SharedSnapshotProvider).GetField("_referenceCount", BindingFlags.NonPublic | BindingFlags.Instance);
-            return (int)field.GetValue(provider);
+            return (int)field!.GetValue(provider)!;
         }
 
         private EntityRepository? GetInternalSnapshot(SharedSnapshotProvider provider)
         {
             var field = typeof(SharedSnapshotProvider).GetField("_sharedSnapshot", BindingFlags.NonPublic | BindingFlags.Instance);
-            return (EntityRepository?)field.GetValue(provider);
+            return (EntityRepository?)field!.GetValue(provider);
         }
 
         [Fact]

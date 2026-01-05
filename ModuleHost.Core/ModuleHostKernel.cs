@@ -79,6 +79,7 @@ namespace ModuleHost.Core
                 {
                     // Acquire view
                     var view = entry.Provider.AcquireView();
+                    entry.LastView = view; // NEW: Track for playback
                     
                     // Calculate delta time for this module
                     float moduleDelta = (entry.FramesSinceLastRun + 1) * deltaTime;
@@ -111,6 +112,28 @@ namespace ModuleHost.Core
             // Note: This blocks the main thread, which is fine for this phase as per design.
             // BATCH-05 might move this to a separate phase if needed.
             Task.WaitAll(tasks.ToArray());
+            
+            // NEW: Playback commands from modules
+            foreach (var entry in _modules)
+            {
+                // Get command buffer from provider's view
+                if (entry.LastView is EntityRepository repo)
+                {
+                    // Iterate ALL values tracked by ThreadLocal (from all threads that used this repo)
+                    foreach (var cmdBuffer in repo._perThreadCommandBuffer.Values)
+                    {
+                        if (cmdBuffer.HasCommands)
+                        {
+                            cmdBuffer.Playback(_liveWorld);
+                            // Clear is called inside Playback automatically? 
+                            // EntityCommandBuffer.Playback says: "Clear buffer after playback -> Clear();"
+                            // So we don't need to call Clear() explicitly if Playback does it.
+                            // Let's check EntityCommandBuffer.Playback implementation.
+                        }
+                    }
+                }
+                entry.LastView = null;
+            }
             
             _currentFrame++;
         }
@@ -163,6 +186,7 @@ namespace ModuleHost.Core
             public IModule Module { get; set; } = null!;
             public ISnapshotProvider Provider { get; set; } = null!;
             public int FramesSinceLastRun { get; set; }
+            public ISimulationView? LastView { get; set; }
         }
     }
 }
