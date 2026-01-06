@@ -1,0 +1,44 @@
+{
+  "nodes": [
+    { "id": 0, "position": { "x": 0, "y": 0 } },
+    { "id": 1, "position": { "x": 100, "y": 0 } },
+    { "id": 2, "position": { "x": 100, "y": 100 } }
+  ],
+  "segments": [
+    {
+      "id": 0,
+      "startNodeId": 0,
+      "endNodeId": 1,
+      "controlPoints": {
+        "p0": { "x": 0, "y": 0 },
+        "t0": { "x": 50, "y": 0 },
+        "p1": { "x": 100, "y": 0 },
+        "t1": { "x": 50, "y": 0 }
+      },
+      "speedLimit": 25.0,
+      "laneWidth": 3.5,
+      "laneCount": 2
+    },
+    {
+      "id": 1,
+      "startNodeId": 1,
+      "endNodeId": 2,
+      "controlPoints": {
+        "p0": { "x": 100, "y": 0 },
+        "t0": { "x": 0, "y": 50 },
+        "p1": { "x": 100, "y": 100 },
+        "t1": { "x": 0, "y": 50 }
+      },
+      "speedLimit": 20.0,
+      "laneWidth": 3.5,
+      "laneCount": 1
+    }
+  ],
+  "metadata": {
+    "worldBounds": {
+      "min": { "x": -10, "y": -10 },
+      "max": { "x": 110, "y": 110 }
+    },
+    "gridCellSize": 5.0
+  }
+}
