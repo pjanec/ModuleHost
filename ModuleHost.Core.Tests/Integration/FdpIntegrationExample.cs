@@ -48,6 +48,8 @@ namespace ModuleHost.Core.Tests.Integration
             moduleHost.RegisterModule(networkModule);
             moduleHost.RegisterModule(aiModule);
             
+            moduleHost.Initialize(); // REQUIRED
+            
             // ============================================
             // SIMULATION LOOP (Every frame)
             // ============================================

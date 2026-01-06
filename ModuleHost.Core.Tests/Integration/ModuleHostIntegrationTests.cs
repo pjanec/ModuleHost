@@ -24,6 +24,7 @@ namespace ModuleHost.Core.Tests.Integration
             
             var testModule = new TestModule();
             kernel.RegisterModule(testModule);
+            kernel.Initialize(); // REQUIRED: Initialize kernel before updates
             
             // Sync initial state is needed?
             // Update logic: SyncFrom happens inside Update.

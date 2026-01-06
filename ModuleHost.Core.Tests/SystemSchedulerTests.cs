@@ -17,10 +17,11 @@ namespace ModuleHost.Core.Tests
         public void TopologicalSort_SimpleChain_CorrectOrder()
         {
             var scheduler = new SystemScheduler();
+            var executionLog = new List<string>();
             
-            var systemA = new TestSystemA();
-            var systemB = new TestSystemB();
-            var systemC = new TestSystemC();
+            var systemA = new TrackingSystemA(executionLog);
+            var systemB = new TrackingSystemB(executionLog);
+            var systemC = new TrackingSystemC(executionLog);
             
             scheduler.RegisterSystem(systemA);
             scheduler.RegisterSystem(systemB);
@@ -28,12 +29,14 @@ namespace ModuleHost.Core.Tests
             
             scheduler.BuildExecutionOrders();
             
-            // Expected order: A -> B -> C
-            // (Verify by checking execution in mock view)
             var mockView = new MockSimulationView();
             scheduler.ExecutePhase(SystemPhase.Simulation, mockView, 0.016f);
             
-            // This test is implicit: if BuildExecutionOrders doesn't throw, sort worked.
+            // CRITICAL: Verify actual execution order
+            Assert.Equal(3, executionLog.Count);
+            Assert.Equal("A", executionLog[0]);
+            Assert.Equal("B", executionLog[1]);
+            Assert.Equal("C", executionLog[2]);
         }
         
         [Fact]
@@ -184,5 +187,32 @@ namespace ModuleHost.Core.Tests
             foreach (var system in _systems)
                 system.Execute(view, deltaTime);
         }
+    }
+
+    // Tracking systems for execution order verification
+    [UpdateInPhaseAttribute(SystemPhase.Simulation)]
+    class TrackingSystemA : IModuleSystem
+    {
+        private readonly List<string> _log;
+        public TrackingSystemA(List<string> log) => _log = log;
+        public void Execute(ISimulationView view, float deltaTime) => _log.Add("A");
+    }
+    
+    [UpdateInPhaseAttribute(SystemPhase.Simulation)]
+    [UpdateAfterAttribute(typeof(TrackingSystemA))]
+    class TrackingSystemB : IModuleSystem
+    {
+        private readonly List<string> _log;
+        public TrackingSystemB(List<string> log) => _log = log;
+        public void Execute(ISimulationView view, float deltaTime) => _log.Add("B");
+    }
+    
+    [UpdateInPhaseAttribute(SystemPhase.Simulation)]
+    [UpdateAfterAttribute(typeof(TrackingSystemB))]
+    class TrackingSystemC : IModuleSystem
+    {
+        private readonly List<string> _log;
+        public TrackingSystemC(List<string> log) => _log = log;
+        public void Execute(ISimulationView view, float deltaTime) => _log.Add("C");
     }
 }

@@ -44,6 +44,7 @@ namespace ModuleHost.Core.Tests
             };
 
             kernel.RegisterModule(module);
+            kernel.Initialize();
             kernel.Update(0.016f);
             
             Assert.True(module.DidRun);
@@ -64,6 +65,7 @@ namespace ModuleHost.Core.Tests
             };
 
             kernel.RegisterModule(module);
+            kernel.Initialize();
             kernel.Update(0.016f);
 
             Assert.Equal(1, live.EntityCount);
@@ -91,6 +93,7 @@ namespace ModuleHost.Core.Tests
             };
 
             kernel.RegisterModule(module);
+            kernel.Initialize();
             kernel.Update(0.016f);
 
             Assert.True(live.HasComponent<TestComponent>(e));
@@ -113,6 +116,7 @@ namespace ModuleHost.Core.Tests
 
             kernel.RegisterModule(m1);
             kernel.RegisterModule(m2);
+            kernel.Initialize();
             kernel.Update(0.016f);
 
             Assert.Equal(2, live.EntityCount);
@@ -135,6 +139,7 @@ namespace ModuleHost.Core.Tests
             };
 
             kernel.RegisterModule(module);
+            kernel.Initialize();
             kernel.Update(0.016f);
 
             Assert.Equal(1, live.EntityCount);
@@ -165,6 +170,7 @@ namespace ModuleHost.Core.Tests
             };
 
             kernel.RegisterModule(module);
+            kernel.Initialize();
             
             // Frame 1: Module runs, queues command. Kernel plays back.
             kernel.Update(0.016f);
@@ -187,6 +193,7 @@ namespace ModuleHost.Core.Tests
             module.OnTick = (view, cmd) => { /* Do nothing */ };
 
             kernel.RegisterModule(module);
+            kernel.Initialize();
             kernel.Update(0.016f);
             
             Assert.True(module.DidRun);

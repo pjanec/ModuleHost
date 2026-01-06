@@ -79,6 +79,8 @@ namespace ModuleHost.Core.Tests.Integration
             moduleHost.RegisterModule(physicsModule);
             moduleHost.RegisterModule(spawnerModule);
             
+            moduleHost.Initialize(); // REQUIRED
+            
             // Execute: Run simulation for 20 frames
             const float deltaTime = 1.0f / 60.0f;
             
@@ -156,6 +158,7 @@ namespace ModuleHost.Core.Tests.Integration
             });
             
             moduleHost.RegisterModule(checkModule, podProvider);
+            moduleHost.Initialize(); // REQUIRED
             moduleHost.Update(0.1f);
             
             // With SoD mask, we should see Position but NOT Velocity?
