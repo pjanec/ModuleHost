@@ -29,6 +29,16 @@ namespace ModuleHost.Core.Abstractions
         int UpdateFrequency { get; }
         
         /// <summary>
+        /// Register systems for this module.
+        /// Called once during initialization.
+        /// </summary>
+        /// <param name="registry">System registry</param>
+        void RegisterSystems(ISystemRegistry registry)
+        {
+            // Default: no systems (modules can override)
+        }
+
+        /// <summary>
         /// Main module execution method.
         /// Called on background thread with read-only simulation view.
         /// 

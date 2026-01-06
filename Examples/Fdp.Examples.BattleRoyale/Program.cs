@@ -49,6 +49,20 @@ class Program
         moduleHost.RegisterModule(new WorldManagerModule());
         Console.WriteLine("✓ Registered WorldManagerModule (Slow tier, 1 Hz)");
         
+        // Register a global test system to verify scheduler
+        moduleHost.RegisterGlobalSystem(new TestGlobalSystem());
+        Console.WriteLine("✓ Registered TestGlobalSystem");
+        
+        // Initialize systems
+        moduleHost.Initialize();
+        Console.WriteLine("✓ Initialized ModuleHost (Systems Registered & Sorted)");
+        
+        // Print schedule debug info
+        Console.WriteLine();
+        Console.WriteLine("=== System Execution Schedule ===");
+        Console.WriteLine(moduleHost.SystemScheduler.ToDebugString());
+        Console.WriteLine("================================");
+        
         Console.WriteLine();
         
         // Spawn entities
@@ -134,4 +148,10 @@ class Program
                               // I will remove ReadKey to allow it to finish and return to terminal.
         // Console.ReadKey(); 
     }
+}
+
+[UpdateInPhaseAttribute(SystemPhase.Simulation)]
+public class TestGlobalSystem : IModuleSystem
+{
+    public void Execute(ISimulationView view, float deltaTime) { }
 }

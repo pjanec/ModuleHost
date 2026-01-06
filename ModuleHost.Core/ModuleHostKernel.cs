@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Fdp.Kernel;
 using ModuleHost.Core.Abstractions;
 using ModuleHost.Core.Providers;
+using ModuleHost.Core.Scheduling;
 
 namespace ModuleHost.Core
 {
@@ -18,6 +19,13 @@ namespace ModuleHost.Core
         private readonly EventAccumulator _eventAccumulator;
         private readonly List<ModuleEntry> _modules = new();
         
+        // Scheduling
+        private readonly SystemScheduler _globalScheduler = new();
+        private bool _initialized = false;
+        
+        // Time accumulation
+        private readonly Dictionary<IModule, float> _accumulatedTime = new();
+        
         private uint _currentFrame = 0;
         
         public ModuleHostKernel(EntityRepository liveWorld, EventAccumulator eventAccumulator)
@@ -26,6 +34,45 @@ namespace ModuleHost.Core
             _eventAccumulator = eventAccumulator ?? throw new ArgumentNullException(nameof(eventAccumulator));
         }
         
+        /// <summary>
+        /// Register a global system (runs on main thread).
+        /// </summary>
+        public void RegisterGlobalSystem<T>(T system) where T : IModuleSystem
+        {
+            if (_initialized)
+                throw new InvalidOperationException("Cannot register systems after Initialize() called");
+            
+            _globalScheduler.RegisterSystem(system);
+        }
+        
+        /// <summary>
+        /// Access to system scheduler for profiling/debugging.
+        /// </summary>
+        public SystemScheduler SystemScheduler => _globalScheduler;
+        
+        /// <summary>
+        /// Initialize kernel: build execution orders, validate dependencies.
+        /// Must be called after all modules/systems registered, before Update().
+        /// </summary>
+        public void Initialize()
+        {
+            if (_initialized)
+                throw new InvalidOperationException("Already initialized");
+            
+            // Modules register their systems
+            foreach (var entry in _modules)
+            {
+                entry.Module.RegisterSystems(_globalScheduler);
+            }
+            
+            // Build dependency graphs and sort
+            _globalScheduler.BuildExecutionOrders();
+            
+            // Throws CircularDependencyException if cycles detected
+            
+            _initialized = true;
+        }
+
         /// <summary>
         /// Registers a module with optional provider override.
         /// If provider is null, assigns default based on module tier:
@@ -60,6 +107,15 @@ namespace ModuleHost.Core
         /// </summary>
         public void Update(float deltaTime)
         {
+            if (!_initialized)
+                throw new InvalidOperationException("Must call Initialize() before Update()");
+            
+            // ═══════════ PHASE: Input ═══════════
+            _globalScheduler.ExecutePhase(SystemPhase.Input, _liveWorld, deltaTime);
+            
+            // ═══════════ PHASE: BeforeSync ═══════════
+            _globalScheduler.ExecutePhase(SystemPhase.BeforeSync, _liveWorld, deltaTime);
+            
             // Capture event history for this frame
             _eventAccumulator.CaptureFrame(_liveWorld.Bus, _currentFrame);
             
@@ -74,6 +130,12 @@ namespace ModuleHost.Core
             
             foreach (var entry in _modules)
             {
+                // ⚠️ CRITICAL: Accumulate time for ALL modules
+                if (!_accumulatedTime.ContainsKey(entry.Module))
+                    _accumulatedTime[entry.Module] = 0f;
+                
+                _accumulatedTime[entry.Module] += deltaTime;
+                
                 // Check if module should run this frame
                 if (ShouldRunThisFrame(entry))
                 {
@@ -81,8 +143,8 @@ namespace ModuleHost.Core
                     var view = entry.Provider.AcquireView();
                     entry.LastView = view; // NEW: Track for playback
                     
-                    // Calculate delta time for this module
-                    float moduleDelta = (entry.FramesSinceLastRun + 1) * deltaTime;
+                    // ⚠️ CRITICAL: Pass accumulated time, not frame time
+                    float moduleDelta = _accumulatedTime[entry.Module];
                     
                     // Dispatch async
                     var task = Task.Run(() =>
@@ -100,6 +162,10 @@ namespace ModuleHost.Core
                     });
                     
                     tasks.Add(task);
+                    
+                    // ⚠️ CRITICAL: Reset accumulator after execution
+                    _accumulatedTime[entry.Module] = 0f;
+                    
                     entry.FramesSinceLastRun = 0;
                 }
                 else
@@ -136,7 +202,12 @@ namespace ModuleHost.Core
                 entry.LastView = null;
             }
             
-            _currentFrame++;
+            // ═══════════ PHASE: PostSimulation ═══════════
+            _globalScheduler.ExecutePhase(SystemPhase.PostSimulation, _liveWorld, deltaTime);
+            
+            // ═══════════ PHASE: Export ═══════════
+            _globalScheduler.ExecutePhase(SystemPhase.Export, _liveWorld, deltaTime);
+            
             _currentFrame++;
         }
 
