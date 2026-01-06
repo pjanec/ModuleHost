@@ -14,13 +14,13 @@
 | BATCH-CK-01 | Foundation | 🟢 COMPLETE | 2026-01-06 | 2026-01-06 | Core data structures |
 | BATCH-CK-02 | Foundation | 🟢 COMPLETE | 2026-01-06 | 2026-01-06 | Math & controls |
 | BATCH-CK-03 | Trajectory | 🟢 COMPLETE | 2026-01-06 | 2026-01-06 | Trajectory pool |
-| BATCH-CK-04 | Road Network | � COMPLETE | 2026-01-06 | 2026-01-06 | JSON loading |
+| BATCH-CK-04 | Road Network |  COMPLETE | 2026-01-06 | 2026-01-06 | JSON loading |
 | BATCH-CK-05 | Road Navigation | 🔵 READY | - | - | State machine |
-| BATCH-CK-06 | Spatial Hash | ⚪ PLANNED | - | - | Collision detection |
-| BATCH-CK-07 | Kinematics | ⚪ PLANNED | - | - | Main physics system |
-| BATCH-CK-08 | Formation | ⚪ PLANNED | - | - | Formation support |
-| BATCH-CK-09 | Commands | ⚪ PLANNED | - | - | Command processing |
-| BATCH-CK-10 | Integration | ⚪ PLANNED | - | - | Example & polish |
+| BATCH-CK-06 | Spatial Hash | 🔵 READY | - | - | Collision detection |
+| BATCH-CK-07 | Kinematics | 🔵 READY | - | - | Main physics system |
+| BATCH-CK-08 | Formation | 🔵 READY | - | - | Formation support |
+| BATCH-CK-09 | Commands | 🔵 READY | - | - | Event processing |
+| BATCH-CK-10 | Integration | 🔵 READY | - | - | Demo app |
 
 **Legend:** 🔵 Ready | 🟡 In Progress | 🟢 Complete | 🔴 Blocked | ⚪ Planned
 
