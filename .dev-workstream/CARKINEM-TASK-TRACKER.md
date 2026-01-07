@@ -14,15 +14,16 @@
 | BATCH-CK-01 | Foundation | 🟢 COMPLETE | 2026-01-06 | 2026-01-06 | Core data structures |
 | BATCH-CK-02 | Foundation | 🟢 COMPLETE | 2026-01-06 | 2026-01-06 | Math & controls |
 | BATCH-CK-03 | Trajectory | 🟢 COMPLETE | 2026-01-06 | 2026-01-06 | Trajectory pool |
-| BATCH-CK-04 | Road Network |  COMPLETE | 2026-01-06 | 2026-01-06 | JSON loading |
-| BATCH-CK-05 | Road Navigation | 🔵 READY | - | - | State machine |
-| BATCH-CK-06 | Spatial Hash | 🔵 READY | - | - | Collision detection |
-| BATCH-CK-07 | Kinematics | 🔵 READY | - | - | Main physics system |
-| BATCH-CK-08 | Formation | 🔵 READY | - | - | Formation support |
-| BATCH-CK-09 | Commands | 🔵 READY | - | - | Event processing |
-| BATCH-CK-10 | Integration | 🔵 READY | - | - | Demo app |
+| BATCH-CK-04 | Road Network | 🟢 COMPLETE | 2026-01-06 | 2026-01-06 | JSON loading |
+| BATCH-CK-05 | Road Navigation | 🟢 COMPLETE | 2026-01-07 | 2026-01-07 | State machine |
+| BATCH-CK-06 | Spatial Hash | 🟢 COMPLETE | 2026-01-07 | 2026-01-07 | Collision detection |
+| BATCH-CK-07 | Kinematics | 🟢 COMPLETE | 2026-01-07 | 2026-01-07 | Main physics system |
+| BATCH-CK-08 | Formation | 🟢 COMPLETE | 2026-01-07 | 2026-01-07 | Formation support |
+| **BATCH-CK-FIX-01** | **Corrections** | **🔴 URGENT** | - | - | **Architectural fixes** |
+| BATCH-CK-09 | Commands | 🟠 BLOCKED | - | - | Event processing |
+| BATCH-CK-10 | Integration | 🟠 BLOCKED | - | - | Demo app |
 
-**Legend:** 🔵 Ready | 🟡 In Progress | 🟢 Complete | 🔴 Blocked | ⚪ Planned
+**Legend:** 🔵 Ready | 🟡 In Progress | 🟢 Complete | 🔴 Urgent | 🟠 Blocked | ⚪ Planned
 
 ---
 
