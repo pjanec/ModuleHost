@@ -21,6 +21,11 @@ namespace Fdp.Examples.CarKinem.Simulation
         private ModuleHostKernel _kernel;
         private EventAccumulator _eventAccumulator;
         
+        // Waypoint queues for multiple entities
+        private Dictionary<int, List<Vector2>> _waypointQueues = new Dictionary<int, List<Vector2>>();
+        private HashSet<int> _roamingEntities = new HashSet<int>();
+        private Random _rng = new Random();
+
         private SpatialHashSystem _spatialSystem;
         private FormationTargetSystem _formationTargetSystem;
 
@@ -110,6 +115,54 @@ namespace Fdp.Examples.CarKinem.Simulation
             _formationTargetSystem.Run();
             _commandSystem.Run();
             _kinematicsSystem.Run();
+            
+            UpdateWaypointQueues();
+            UpdateRoamers();
+        }
+
+        private void UpdateRoamers()
+        {
+            foreach(var id in new List<int>(_roamingEntities))
+            {
+                var entity = new Entity(id, 1);
+                if (!_repository.IsAlive(entity)) { _roamingEntities.Remove(id); continue; }
+                
+                var nav = _repository.GetComponent<NavState>(entity);
+                if (nav.HasArrived == 1)
+                {
+                     // Pick new point
+                     SetDestination(id, new Vector2(_rng.Next(0,500), _rng.Next(0,500)));
+                }
+            }
+        }
+
+        private void UpdateWaypointQueues()
+        {
+            // Prune visited waypoints
+            // Create list of keys to allow modification of dictionary
+            foreach (var entityIndex in new List<int>(_waypointQueues.Keys))
+            {
+                var queue = _waypointQueues[entityIndex];
+                if (queue.Count == 0) continue;
+                
+                // Assume generation 1 for simplicity in this demo
+                var entity = new Entity(entityIndex, 1); 
+                if (!_repository.IsAlive(entity)) {
+                     _waypointQueues.Remove(entityIndex);
+                     continue;
+                }
+
+                var state = _repository.GetComponent<VehicleState>(entity);
+                
+                // Check distance to next target
+                // If close enough, remove it from queue (it's been "visited")
+                if (Vector2.Distance(state.Position, queue[0]) < 8.0f) 
+                {
+                     queue.RemoveAt(0);
+                     // We don't need to rebuild trajectory here; the current trajectory 
+                     // is valid until we add a NEW point.
+                }
+            }
         }
         
         public int SpawnVehicle(Vector2 position, Vector2 heading, global::CarKinem.Core.VehicleClass vehicleClass = global::CarKinem.Core.VehicleClass.PersonalCar)
@@ -135,25 +188,112 @@ namespace Fdp.Examples.CarKinem.Simulation
             return e.Index;
         }
         
-        public void IssueMoveToPointCommand(int entityIndex, Vector2 destination)
+        public void AddWaypoint(int entityIndex, Vector2 destination)
         {
-             // For demo, we are restricted by public API not having Entity.
-             // We will try to construct Entity assuming generation 1.
-             // This is BRITTLE but allows compilation for now.
-             // In a real app we'd pass Entity instances around.
-             IssueMoveToPointCommand(new Entity(entityIndex, 1), destination);
+             // 1. Get/Create Queue
+             if (!_waypointQueues.ContainsKey(entityIndex))
+             {
+                 _waypointQueues[entityIndex] = new List<Vector2>();
+             }
+             
+             // 2. Add to Queue
+             _waypointQueues[entityIndex].Add(destination);
+             
+             // 3. Construct Trajectory from Current Position
+             // Assume generation 1
+             var entity = new Entity(entityIndex, 1);
+             if (!_repository.IsAlive(entity)) return;
+
+             var state = _repository.GetComponent<VehicleState>(entity);
+             
+             var path = new List<Vector2>();
+             path.Add(state.Position);
+             path.AddRange(_waypointQueues[entityIndex]);
+             
+             // 4. Create Speeds (Cruise=15, Stop=0 at end)
+             var speeds = new float[path.Count];
+             for(int i=0; i<speeds.Length; i++) speeds[i] = 15.0f;
+             speeds[speeds.Length - 1] = 0.0f; // Stop at end
+             
+             // 5. Register new Trajectory
+             int trajId = TrajectoryPool.RegisterTrajectory(path.ToArray(), speeds, false);
+             
+             // Cleanup old trajectory to prevent leaks
+             // Only if we were strictly following a custom trajectory before
+             var oldNav = _repository.GetComponent<NavState>(entity);
+             if (oldNav.Mode == NavigationMode.CustomTrajectory && oldNav.TrajectoryId > 0)
+             {
+                 TrajectoryPool.RemoveTrajectory(oldNav.TrajectoryId);
+             }
+             
+             // 6. Issue Command (Reset progress to 0)
+             _repository.Bus.Publish(new CmdFollowTrajectory {
+                Entity = entity,
+                TrajectoryId = trajId
+            });
+        }
+        
+        public void SetDestination(int entityIndex, Vector2 destination)
+        {
+             if (_waypointQueues.ContainsKey(entityIndex))
+             {
+                 _waypointQueues[entityIndex].Clear();
+             }
+             AddWaypoint(entityIndex, destination);
         }
 
-        public void IssueMoveToPointCommand(Entity entity, Vector2 destination)
+        // Deprecated compatibility wrapper
+        public void IssueMoveToPointCommand(int entityIndex, Vector2 destination) => AddWaypoint(entityIndex, destination);
+        public void IssueMoveToPointCommand(Entity entity, Vector2 destination) => AddWaypoint(entity.Index, destination);
+
+        public void SpawnCollisionTest(global::CarKinem.Core.VehicleClass vClass)
         {
-             // Direct access is safe here because we are on the Main Thread
-             // and we want the event to be picked up in the CURRENT frame's execution logic if possible.
-             _repository.Bus.Publish(new CmdNavigateToPoint {
-                Entity = entity,
-                Destination = destination,
-                Speed = 10.0f,
-                ArrivalRadius = 2.0f
-            });
+            // 5 pairs attacking each other
+            for(int i=0; i<5; i++)
+            {
+                 Vector2 center = new Vector2(250 + i * 20, 250 + i * 20); 
+                 Vector2 offset = new Vector2(40, 0);
+                 
+                 int idA = SpawnVehicle(center - offset, new Vector2(1, 0), vClass);
+                 SetDestination(idA, center + offset);
+                 
+                 int idB = SpawnVehicle(center + offset, new Vector2(-1, 0), vClass);
+                 SetDestination(idB, center - offset);
+            }
+        }
+
+        public void SpawnRoadUsers(int count, global::CarKinem.Core.VehicleClass vClass)
+        {
+            if (!RoadNetwork.Nodes.IsCreated || RoadNetwork.Nodes.Length < 2) return;
+            
+            for(int i=0; i<count; i++)
+            {
+                int startNodeIdx = _rng.Next(0, RoadNetwork.Nodes.Length);
+                var startNode = RoadNetwork.Nodes[startNodeIdx];
+                int endNodeIdx = _rng.Next(0, RoadNetwork.Nodes.Length);
+                var endNode = RoadNetwork.Nodes[endNodeIdx];
+                
+                int id = SpawnVehicle(startNode.Position, new Vector2(1,0), vClass);
+                
+                var entity = new Entity(id, 1);
+                _repository.Bus.Publish(new CmdNavigateViaRoad {
+                     Entity = entity,
+                     Destination = endNode.Position,
+                     ArrivalRadius = 5.0f
+                });
+            }
+        }
+
+        public void SpawnRoamers(int count, global::CarKinem.Core.VehicleClass vClass)
+        {
+            for(int i=0; i<count; i++)
+            {
+                 Vector2 pos = new Vector2(_rng.Next(0,500), _rng.Next(0,500));
+                 int id = SpawnVehicle(pos, Vector2.Zero, vClass);
+                 
+                 _roamingEntities.Add(id);
+                 SetDestination(id, new Vector2(_rng.Next(0,500), _rng.Next(0,500)));
+            }
         }
 
         public NavState GetNavState(int entityIndex)

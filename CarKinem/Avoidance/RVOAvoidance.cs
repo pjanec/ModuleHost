@@ -48,11 +48,19 @@ namespace CarKinem.Avoidance
                 
                 // Apply repulsion if on collision course
                 // Dot > 0 means we are moving towards the neighbor (distance decreasing)
-                if (Vector2.Dot(relVel, relPos) > 0f && ttc < 2.0f)
+                if (Vector2.Dot(relVel, relPos) > 0f && ttc < 4.0f)
                 {
                     // Repulsion inversely proportional to distance
-                    Vector2 repulsion = -Vector2.Normalize(relPos) * (5.0f / dist);
-                    avoidanceForce += repulsion;
+                    Vector2 dir = Vector2.Normalize(relPos);
+                    
+                    // Main repulsion (braking/reversing)
+                    Vector2 repulsion = -dir * (10.0f / (dist + 0.1f));
+                    
+                    // Lateral bias (steer right) to break symmetry and pass
+                    // Rotate dir -90 degrees (CW): (x,y) -> (y, -x)
+                    Vector2 lateral = new Vector2(dir.Y, -dir.X) * (4.0f / (dist + 0.1f));
+                    
+                    avoidanceForce += repulsion + lateral;
                 }
             }
             

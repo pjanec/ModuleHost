@@ -102,7 +102,16 @@ namespace Fdp.Examples.CarKinem.Input
             {
                 if (selection.SelectedEntityId.HasValue)
                 {
-                    simulation.IssueMoveToPointCommand(selection.SelectedEntityId.Value, mouseWorld);
+                    if (Raylib.IsKeyDown(KeyboardKey.LeftShift) || Raylib.IsKeyDown(KeyboardKey.RightShift))
+                    {
+                        // Shift+Right: Append to queue
+                        simulation.AddWaypoint(selection.SelectedEntityId.Value, mouseWorld);
+                    }
+                    else
+                    {
+                        // Right: Clear queue and move immediately
+                        simulation.SetDestination(selection.SelectedEntityId.Value, mouseWorld);
+                    }
                 }
             }
         }

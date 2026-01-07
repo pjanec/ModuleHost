@@ -98,10 +98,11 @@ namespace CarKinem.Systems
                     }
                     else
                     {
-                        // Idle
+                        // Idle / Arrived
                         targetPos = state.Position;
                         targetHeading = state.Forward;
                         targetSpeed = 0f;
+                        nav.HasArrived = 1; // Mark as arrived to stop logic
                     }
                     break;
             }
@@ -150,6 +151,23 @@ namespace CarKinem.Systems
         
         private (Vector2 pos, Vector2 heading, float speed) SampleCustomTrajectory(ref NavState nav)
         {
+            // Check if we reached the end of the trajectory
+            if (_trajectoryPool.TryGetTrajectory(nav.TrajectoryId, out var traj))
+            {
+                if (traj.IsLooped == 0 && nav.ProgressS >= traj.TotalLength - 0.1f) // 10cm tolerance
+                {
+                    nav.HasArrived = 1;
+                    // Provide the last waypoint position/tangent but 0 speed
+                    if (traj.Waypoints.Length > 0)
+                    {
+                         var last = traj.Waypoints[traj.Waypoints.Length - 1];
+                         // Keep current heading (via last tangent) to avoid spinning
+                         Vector2 t = traj.Waypoints.Length > 1 ? Vector2.Normalize(last.Position - traj.Waypoints[traj.Waypoints.Length-2].Position) : new Vector2(1,0);
+                         return (last.Position, t, 0f);
+                    }
+                }
+            }
+
             var (pos, tangent, speed) = _trajectoryPool.SampleTrajectory(nav.TrajectoryId, nav.ProgressS);
             return (pos, tangent, speed);
         }

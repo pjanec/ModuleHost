@@ -94,6 +94,14 @@ namespace Fdp.Examples.CarKinem
 
                 if (selection.SelectedEntityId.HasValue)
                 {
+                    // Render Active Trajectory for selected entity
+                    var nav = simulation.GetNavState(selection.SelectedEntityId.Value);
+                    if (nav.Mode == global::CarKinem.Core.NavigationMode.CustomTrajectory)
+                    {
+                        // Draw with Raylib (Background layer)
+                        trajRenderer.RenderTrajectory(nav.TrajectoryId, nav.ProgressS, camera, Color.Blue);
+                    }
+                    
                     // Selection highlight handled in VehicleRenderer
                 }
                 

@@ -38,6 +38,22 @@ namespace Fdp.Examples.CarKinem.UI
             
             ImGui.SameLine();
             
+            if (ImGui.Button("Spawn Collision Test"))
+            {
+                sim.SpawnCollisionTest(uiState.SelectedVehicleClass);
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Spawn Road Users"))
+            {
+               sim.SpawnRoadUsers(_spawnCount, uiState.SelectedVehicleClass);
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Spawn Roamers"))
+            {
+               sim.SpawnRoamers(_spawnCount, uiState.SelectedVehicleClass);
+            }
+            ImGui.SameLine();
+            
             if (ImGui.Button("Clear All"))
             {
                 // sim.ClearAllVehicles(); // TODO: Implement Clear in Simulation
