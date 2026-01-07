@@ -10,7 +10,7 @@ namespace Fdp.Examples.CarKinem.Input
         private bool _isDragging;
         private bool _possibleClick;
 
-        public void HandleInput(SelectionManager selection, PathEditingMode pathEditor, ref Camera2D camera, DemoSimulation simulation)
+        public void HandleInput(SelectionManager selection, PathEditingMode pathEditor, ref Camera2D camera, DemoSimulation simulation, global::Fdp.Examples.CarKinem.UI.UIState uiState)
         {
             float dt = Raylib.GetFrameTime();
             
@@ -21,7 +21,7 @@ namespace Fdp.Examples.CarKinem.Input
                 Vector2 mouseScreenPos = Raylib.GetMousePosition();
                 Vector2 worldPosBeforeZoom = Raylib.GetScreenToWorld2D(mouseScreenPos, camera);
 
-                camera.Zoom = Math.Clamp(camera.Zoom + wheel * 0.125f * camera.Zoom, 0.1f, 5.0f);
+                camera.Zoom = Math.Clamp(camera.Zoom + wheel * 0.125f * camera.Zoom, 0.01f, 100.0f);
                 
                 Vector2 worldPosAfterZoom = Raylib.GetScreenToWorld2D(mouseScreenPos, camera);
                 camera.Target += (worldPosBeforeZoom - worldPosAfterZoom);
@@ -40,8 +40,8 @@ namespace Fdp.Examples.CarKinem.Input
 
                 if (Raylib.IsKeyDown(KeyboardKey.LeftControl))
                 {
-                    // Instant Spawn
-                    simulation.SpawnVehicle(mouseWorld, new Vector2(1, 0));
+                    // Instant Spawn - use selected vehicle class from UI
+                    simulation.SpawnVehicle(mouseWorld, new Vector2(1, 0), uiState.SelectedVehicleClass);
                     _possibleClick = false; // Don't process as selection
                 }
             }
@@ -69,15 +69,21 @@ namespace Fdp.Examples.CarKinem.Input
                 if (_possibleClick && !Raylib.IsKeyDown(KeyboardKey.LeftControl))
                 {
                     // It was a click (not a drag)
-                    // Check for entity
+                    // Check for entity with larger tolerance
                     int? clickedEntity = null;
                     float minDistance = float.MaxValue;
+                    
+                    // Base tolerance of 8 world units, scaled by zoom
+                    // At zoom 1.0, tolerance is 8.0
+                    // At zoom 2.0, tolerance is 4.0 (entities appear larger, need less tolerance)
+                    // At zoom 0.5, tolerance is 16.0 (entities appear smaller, need more tolerance)
+                    float clickTolerance = 8.0f / camera.Zoom;
                     
                     var query = simulation.View.Query().With<global::CarKinem.Core.VehicleState>().Build();
                     query.ForEach((entity) => {
                          var state = simulation.View.GetComponentRO<global::CarKinem.Core.VehicleState>(entity);
                          float dist = Vector2.Distance(state.Position, mouseWorld);
-                         if (dist < 3.0f && dist < minDistance)
+                         if (dist < clickTolerance && dist < minDistance)
                          {
                              minDistance = dist;
                              clickedEntity = entity.Index;

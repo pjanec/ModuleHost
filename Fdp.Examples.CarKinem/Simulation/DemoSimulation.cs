@@ -112,7 +112,7 @@ namespace Fdp.Examples.CarKinem.Simulation
             _kinematicsSystem.Run();
         }
         
-        public int SpawnVehicle(Vector2 position, Vector2 heading)
+        public int SpawnVehicle(Vector2 position, Vector2 heading, global::CarKinem.Core.VehicleClass vehicleClass = global::CarKinem.Core.VehicleClass.PersonalCar)
         {
             var e = _repository.CreateEntity();
             
@@ -123,13 +123,10 @@ namespace Fdp.Examples.CarKinem.Simulation
                 SteerAngle = 0
             });
             
-            _repository.AddComponent(e, new VehicleParams {
-                Length = 4.0f,
-                Width = 2.0f,
-                MaxSpeedFwd = 20.0f,
-                MaxSteerAngle = 0.5f,
-                // Color removed
-            });
+            // Use preset for the vehicle class
+            var preset = global::CarKinem.Core.VehiclePresets.GetPreset(vehicleClass);
+            preset.Class = vehicleClass; // Set the class field
+            _repository.AddComponent(e, preset);
             
             _repository.AddComponent(e, new NavState {
                 Mode = NavigationMode.None

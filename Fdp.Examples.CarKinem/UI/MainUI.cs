@@ -9,9 +9,11 @@ namespace Fdp.Examples.CarKinem.UI
     {
         private SpawnControlsPanel _spawnControls = new();
         private SimulationControlsPanel _simControls = new();
-        private InspectorPanel _inspector = new();
+        private EntityInspector _entityInspector = new();
+        private EventInspector _eventInspector = new();
         private PerformancePanel _perfPanel = new();
         
+        public UIState UIState { get; } = new();
         public bool IsPaused => _simControls.IsPaused;
         public float TimeScale => _simControls.TimeScale;
 
@@ -32,7 +34,7 @@ namespace Fdp.Examples.CarKinem.UI
                 
                 if (ImGui.CollapsingHeader("Spawning", ImGuiTreeNodeFlags.DefaultOpen))
                 {
-                    _spawnControls.Render(simulation);
+                    _spawnControls.Render(simulation, UIState);
                 }
                 
                 if (ImGui.CollapsingHeader("Performance", ImGuiTreeNodeFlags.DefaultOpen))
@@ -43,10 +45,15 @@ namespace Fdp.Examples.CarKinem.UI
                 ImGui.End();
             }
             
-            if (selection.SelectedEntityId.HasValue)
-            {
-                _inspector.Render(simulation, selection.SelectedEntityId.Value);
-            }
+            // Entity Inspector - separate window
+            _entityInspector.SetContext((Fdp.Kernel.EntityRepository)simulation.View, selection);
+            _entityInspector.Update();
+            _entityInspector.DrawImGui();
+            
+            // Event Inspector - separate window
+            _eventInspector.SetEventBus(simulation.Repository.Bus);
+            _eventInspector.Update();
+            _eventInspector.DrawImGui();
         }
     }
 }

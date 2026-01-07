@@ -10,6 +10,7 @@ namespace CarKinem.Core
     [StructLayout(LayoutKind.Sequential)]
     public struct VehicleParams
     {
+        public VehicleClass Class;   // Vehicle classification
         public float Length;         // Vehicle length (meters)
         public float Width;          // Vehicle width (meters)
         public float WheelBase;      // Distance between axles (meters)

@@ -1,323 +1,220 @@
-# Developer Workstream - Instructions
+# ModuleHost Development Workflow
 
-**Project:** B-One NG Module Host - Hybrid GDB+SoD Architecture  
-**Development Leader:** [Your Manager]  
-**Developer:** [You]  
-**Start Date:** January 4, 2026
+## 🎯 Overview
 
----
-
-## 📋 Overview
-
-You will receive implementation tasks in **batches**. Each batch contains multiple related tasks that form a cohesive development phase. Work through all tasks in a batch before submitting your report.
-
-**Your responsibilities:**
-1. Implement all tasks in the batch
-2. Write unit tests (and integration tests where specified)
-3. Ensure all tests pass
-4. Report results using the specified format
-5. Raise blockers or questions immediately
-
----
+This folder contains the development workflow for implementing ModuleHost advanced features. You are the developer responsible for implementing batches of tasks according to specifications provided by the Development Lead.
 
 ## 📁 Folder Structure
 
 ```
 .dev-workstream/
-├── README.md                    (This file - your instructions)
-├── templates/                   (Templates for your reports)
+├── README.md                    ← This file (workflow instructions)
+├── templates/                   ← Templates for your submissions
 │   ├── BATCH-REPORT-TEMPLATE.md
 │   ├── QUESTIONS-TEMPLATE.md
 │   └── BLOCKERS-TEMPLATE.md
-├── batches/                     (Task batches from manager)
+├── batches/                     ← Task instructions from Dev Lead
 │   ├── BATCH-01-INSTRUCTIONS.md
 │   ├── BATCH-02-INSTRUCTIONS.md
 │   └── ...
-├── reports/                     (Your submissions)
+├── reports/                     ← Your completed batch reports
 │   ├── BATCH-01-REPORT.md
-│   ├── BATCH-01-QUESTIONS.md (if needed)
-│   └── BLOCKERS-ACTIVE.md (if blocked)
-└── reviews/                     (Manager feedback)
+│   ├── BATCH-02-REPORT.md
+│   └── ...
+├── questions/                   ← Your questions if blocked
+│   ├── BATCH-01-QUESTIONS.md
+│   └── ...
+└── reviews/                     ← Dev Lead feedback
     ├── BATCH-01-REVIEW.md
     └── ...
 ```
 
----
-
-## 🔄 Workflow
+## 🔄 Workflow Process
 
 ### Step 1: Receive Batch Instructions
+- Check `batches/BATCH-XX-INSTRUCTIONS.md` for your tasks
+- Read all referenced design documents
+- Review existing codebase to understand current implementation
 
-Manager will create: `.dev-workstream/batches/BATCH-{NN}-INSTRUCTIONS.md`
+### Step 2: Work on Tasks
+- Implement features according to specifications
+- Write unit tests as specified in the instructions
+- Run all tests (unit + integration) frequently
+- Document any deviations or improvements you make
+- If blocked or uncertain, create a questions file
 
-**You will be notified with the full path.**
+### Step 3: Submit Report
+When all tasks are complete and tests passing:
 
-### Step 2: Read Instructions Carefully
-
-- Review all tasks in the batch
-- Read referenced design documents
-- Understand acceptance criteria
-- Note test requirements
-
-### Step 3: Work on Tasks
-
-**Guidelines:**
-- ✅ Work on tasks in the order specified (unless dependencies allow parallelization)
-- ✅ **Max 2 tasks in progress simultaneously** (to avoid context switching)
-- ✅ Follow existing code conventions and architecture
-- ✅ Write tests as you go (TDD encouraged)
-- ✅ Ensure code compiles **without warnings** (`dotnet build` must be clean)
-
-**If you take initiative beyond instructions:**
-- ✅ Document it clearly in your report
-- ✅ Explain rationale
-- ✅ Mark as "Additional work - needs review"
-
-### Step 4: Handle Blockers or Questions
-
-**If Blocked:**
-1. Create/Update: `reports/BLOCKERS-ACTIVE.md` using the template
-2. **Update immediately** when blocked (don't wait for batch completion)
-3. Manager will respond in-line with guidance
-4. Continue with other tasks while waiting (if possible)
-
-**If Questions:**
-1. Create: `reports/BATCH-{NN}-QUESTIONS.md` using the template
-2. Continue with tasks you can complete
-3. Manager will provide `BATCH-{NN}-ANSWERS.md`
-
-### Step 5: Complete Batch
-
-When all tasks are complete (or blocked):
-
-1. **Run all tests:**
-   ```powershell
-   dotnet test --nologo --verbosity minimal
+1. **Copy the report template:**
+   ```
+   cp templates/BATCH-REPORT-TEMPLATE.md reports/BATCH-XX-REPORT.md
    ```
 
-2. **Check for warnings:**
-   ```powershell
-   dotnet build --nologo | Select-String "warning"
+2. **Fill out the report with:**
+   - Task completion status
+   - Test results (all must pass)
+   - Any deviations or improvements made
+   - Performance observations
+   - Integration notes
+   - Known issues or limitations
+
+3. **Notify the Dev Lead** that the batch is ready for review
+
+### Step 4: Handle Questions/Blockers
+If you encounter questions or blockers during development:
+
+1. **Create a questions file:**
    ```
-   ⚠️ **Must be zero warnings!**
+   cp templates/QUESTIONS-TEMPLATE.md questions/BATCH-XX-QUESTIONS.md
+   ```
 
-3. **Create Batch Report:**
-   - Use template: `templates/BATCH-REPORT-TEMPLATE.md`
-   - Save as: `reports/BATCH-{NN}-REPORT.md`
-   - Fill in ALL sections (see template)
+2. **Document your questions clearly:**
+   - What you're trying to accomplish
+   - What's unclear or blocking you
+   - What options you've considered
+   - Your recommendation (if any)
 
-4. **Notify manager** that batch is complete
+3. **Notify the Dev Lead** and wait for answers before proceeding
 
-### Step 6: Receive Review
+## ✅ Definition of Done
 
-Manager will create: `reviews/BATCH-{NN}-REVIEW.md`
+A batch is considered DONE when:
 
-**Possible outcomes:**
-- ✅ **Approved** → Manager assigns next batch
-- ⚠️ **Changes Requested** → Fix issues, resubmit report
-- ❌ **Major Issues** → Manager provides corrective instructions
+1. ✅ All tasks implemented according to specifications
+2. ✅ All unit tests written and PASSING
+3. ✅ All integration tests PASSING
+4. ✅ Code follows existing architecture patterns
+5. ✅ Performance benchmarks run (if applicable)
+6. ✅ Report submitted with complete information
+7. ✅ No compilation warnings
+8. ✅ Code is committed to version control
 
----
+## 📋 Important Guidelines
 
-## 📝 Report Requirements
+### Code Quality
+- Follow existing code style and patterns in the codebase
+- Use meaningful variable and method names
+- Add XML documentation comments for public APIs
+- Keep methods focused and single-purpose
 
-### Batch Report Must Include:
+### Testing
+- Test behavior, not implementation details
+- Include edge cases and error conditions
+- Use descriptive test names: `Test_NonBlockingModule_WhenStillRunning_SkipsAndContinues`
+- Verify performance characteristics where specified
 
-1. **Executive Summary**
-   - Batch status (Complete / Partial / Blocked)
-   - Overall progress
-   - Critical issues
+### Deviations
+If you identify improvements or необходимости to deviate from specs:
+- Document WHY in your report
+- Explain the benefit
+- Note any risks or tradeoffs
+- Implement it BUT also flag it for review
 
-2. **Task Status Table**
-   - Each task: Status, Tests Status, Notes
+### Performance
+- Run benchmarks when specified
+- Report timing and memory metrics
+- Flag any concerning performance issues
 
-3. **Files Changed**
-   - List all modified/created files
-   - Brief description of changes
+## 🚨 When to Ask Questions
 
-4. **Test Results**
-   - Total tests: Pass / Fail
-   - Performance benchmark results (if applicable)
-   - Test output summary
+Ask questions when:
+- Specification is ambiguous or contradictory
+- Integration point with existing code is unclear
+- Performance target seems impossible to meet
+- Architecture decision affects multiple systems
+- You discover a fundamental design issue
 
-5. **Additional Work**
-   - Any work done beyond instructions
-   - Rationale for each item
+DON'T ask questions for:
+- Minor implementation details (use your judgment)
+- Code style preferences (follow existing patterns)
+- Basic C# syntax (research first)
 
-6. **Known Issues**
-   - Any bugs or concerns discovered
-   - Suggestions for resolution
+## 📊 Reporting Standards
 
-7. **Next Steps**
-   - Blockers preventing progress
-   - Recommendations for next batch
+### Test Results Format
+```
+✅ All Tests Passing
+- Unit Tests: 47/47 passing
+- Integration Tests: 12/12 passing
+- Performance Tests: 5/5 passing (all within targets)
+```
 
-**Use the template!** (`templates/BATCH-REPORT-TEMPLATE.md`)
+### Performance Metrics Format
+```
+Benchmark: ModuleDispatch_NonBlocking_100Modules
+- Average: 2.3ms
+- P95: 3.1ms
+- P99: 4.2ms
+- Target: <5ms ✅
+```
 
----
+### Code Changes Summary
+```
+Files Added: 5
+Files Modified: 8
+Lines Added: 1,234
+Lines Removed: 67
+Test Coverage: 94% (target: >90%)
+```
 
-## ✅ Definition of Done (DoD)
+## 🔧 Development Environment
 
-A task is **DONE** when:
+### Running Tests
+```bash
+# Unit tests only
+dotnet test ModuleHost.Core.Tests
 
-- [x] Code implemented according to acceptance criteria
-- [x] All specified unit tests written and **passing**
-- [x] Integration tests written (if specified) and passing
-- [x] Code compiles **without warnings** (treat warnings as errors)
-- [x] Performance benchmarks pass (if tests include them)
-- [x] XML documentation comments added for public APIs
-- [x] Code follows existing conventions (naming, structure, patterns)
-- [x] No regressions (existing tests still pass)
+# Integration tests only  
+dotnet test ModuleHost.Tests
 
-**If any DoD criteria fails, task is NOT done.**
+# All tests with verbosity
+dotnet test --verbosity normal
 
----
+# With coverage
+dotnet test /p:CollectCoverage=true
+```
 
-## 🚨 Critical Rules
+### Running Benchmarks
+```bash
+cd ModuleHost.Benchmarks
+dotnet run -c Release
+```
 
-### Mandatory
+## 📚 Key Reference Documents
 
-1. ⛔ **NO warnings allowed** - Treat warnings as errors
-2. ⛔ **ALL tests must pass** - No exceptions
-3. ⛔ **Follow architecture strictly** - Don't violate documented patterns
-4. ⛔ **Tier 2 immutability** - Managed components MUST be immutable records
-5. ⛔ **No breaking changes** - Unless explicitly instructed
+Always review these before starting a batch:
+- **Design Document:** `docs/DESIGN-IMPLEMENTATION-PLAN.md`
+- **Architecture Overview:** `docs/ModuleHost-TODO.md`
+- **Current Implementation:** Review existing code in `ModuleHost.Core/`
 
-### Encouraged
+## ⚡ Quick Start Checklist
 
-1. ✅ **Ask questions early** - Don't guess if unclear
-2. ✅ **Report blockers immediately** - Don't wait for batch end
-3. ✅ **Take reasonable initiative** - But document it clearly
-4. ✅ **Optimize for readability** - Code will be reviewed
-5. ✅ **Test edge cases** - Not just happy path
+Before starting each batch:
+- [ ] Read batch instructions completely
+- [ ] Review referenced design sections
+- [ ] Examine existing code structure
+- [ ] Set up test project if needed
+- [ ] Understand acceptance criteria
+- [ ] Create questions file if anything unclear
 
----
+During development:
+- [ ] Write tests first (TDD approach recommended)
+- [ ] Run tests frequently
+- [ ] Document significant decisions
+- [ ] Track any deviations
 
-## 📚 Reference Documents
-
-**Always available in `/docs`:**
-
-- **IMPLEMENTATION-SPECIFICATION.md** - Master specification
-- **API-REFERENCE.md** - Complete API documentation
-- **IMPLEMENTATION-TASKS.md** - Full task list
-- **HYBRID-ARCHITECTURE-QUICK-REFERENCE.md** - Quick reference
-- **MODULE-IMPLEMENTATION-EXAMPLES.md** - Code examples
-- **MIGRATION-PLAN-Hybrid-Architecture.md** - Migration strategy
-- **MEMORY-LAYOUT-DIAGRAMS.md** - Memory architecture
-
-**Refer to these documents when implementing!**
-
----
-
-## 📧 File Naming Conventions
-
-**You must use these exact names:**
-
-| Type | Filename | Location |
-|------|----------|----------|
-| **Batch Report** | `BATCH-{NN}-REPORT.md` | `reports/` |
-| **Questions** | `BATCH-{NN}-QUESTIONS.md` | `reports/` |
-| **Active Blockers** | `BLOCKERS-ACTIVE.md` | `reports/` |
-
-**Examples:**
-- `reports/BATCH-01-REPORT.md`
-- `reports/BATCH-01-QUESTIONS.md`
-- `reports/BLOCKERS-ACTIVE.md` (single file, update in-place)
-
----
-
-## 🔍 Code Review Checklist
-
-Before submitting batch report, self-review:
-
-**Architecture:**
-- [ ] Follows 3-world topology (Live, Fast GDB, Slow SoD)
-- [ ] Respects mutability boundaries (Live=RW, Replicas=RO)
-- [ ] Uses correct synchronization API (`SyncFrom`)
-- [ ] Tier 2 components are immutable records
-
-**Code Quality:**
+Before submitting:
+- [ ] All tests passing
 - [ ] No compiler warnings
-- [ ] No magic numbers (use constants)
-- [ ] Clear variable names
-- [ ] Methods < 50 lines (reasonable complexity)
-- [ ] XML comments on public APIs
-
-**Testing:**
-- [ ] Unit tests cover happy path
-- [ ] Unit tests cover error cases
-- [ ] Integration tests validate component interaction
-- [ ] Performance benchmarks pass (if applicable)
-- [ ] All tests pass (`dotnet test`)
-
-**Performance:**
-- [ ] No obvious performance issues
-- [ ] Dirty tracking used correctly
-- [ ] No unnecessary allocations
-- [ ] Chunk versioning implemented correctly
+- [ ] Code committed
+- [ ] Report filled out completely
+- [ ] Performance benchmarks run (if applicable)
 
 ---
 
-## 🎯 Success Criteria
+**Remember:** You're a capable developer. Use your initiative, but document your decisions. The Lead trusts your judgment but needs to review the results.
 
-**You are successful when:**
+**Communication:** All communication happens through markdown files in this folder structure. No verbal discussions assumed.
 
-1. ✅ All batch tasks marked DONE (pass DoD)
-2. ✅ All tests passing (100% pass rate)
-3. ✅ Zero compiler warnings
-4. ✅ Batch report complete and accurate
-5. ✅ Manager approves batch in review
-
-**Manager will evaluate:**
-- Correctness (does it work as specified?)
-- Quality (is the code maintainable?)
-- Completeness (are all DoD criteria met?)
-- Architecture compliance (follows design documents?)
-- Testing (adequate coverage and quality?)
-
----
-
-## 🚀 Getting Started
-
-1. **Wait for manager notification** with first batch path
-2. **Read batch instructions carefully**
-3. **Review reference documents**
-4. **Start implementing tasks**
-5. **Submit batch report when complete**
-
----
-
-## 💡 Tips for Success
-
-**Do:**
-- ✅ Read all batch instructions before starting
-- ✅ Refer to design docs frequently
-- ✅ Write tests as you implement (TDD)
-- ✅ Ask questions early if unclear
-- ✅ Report blockers immediately
-- ✅ Take initiative when it aligns with architecture
-
-**Don't:**
-- ❌ Skip reading design documents
-- ❌ Ignore compiler warnings
-- ❌ Write code without tests
-- ❌ Deviate from architecture without asking
-- ❌ Wait until batch end to report blockers
-- ❌ Submit incomplete work
-
----
-
-## 📞 Communication
-
-**All communication via markdown files in this folder.**
-
-- **Manager → You:** Batch instructions, reviews, answers
-- **You → Manager:** Reports, questions, blockers
-
-**No email, no chat - everything documented in markdown.**
-
----
-
-**Good luck! 🚀**
-
-*Last Updated: January 4, 2026*
+Good luck! 🚀

@@ -26,7 +26,25 @@ namespace Fdp.Examples.CarKinem
             // Initialize Raylib
             // Try to set flags before init to maybe help compatibility or logging
             Raylib.SetConfigFlags(ConfigFlags.ResizableWindow | ConfigFlags.Msaa4xHint);
-            Raylib.InitWindow(1280, 720, "Car Kinematics Demo");
+            
+            // Try to restore window size from previous session
+            int windowWidth = 1280;
+            int windowHeight = 720;
+            if (File.Exists("window_config.txt"))
+            {
+                try
+                {
+                    var lines = File.ReadAllLines("window_config.txt");
+                    if (lines.Length >= 2)
+                    {
+                        windowWidth = int.Parse(lines[0]);
+                        windowHeight = int.Parse(lines[1]);
+                    }
+                }
+                catch { /* Use defaults on error */ }
+            }
+            
+            Raylib.InitWindow(windowWidth, windowHeight, "Car Kinematics Demo");
             Raylib.SetTargetFPS(60);
             
             // Initialize ImGui
@@ -56,7 +74,7 @@ namespace Fdp.Examples.CarKinem
                 float dt = Raylib.GetFrameTime();
                 
                 // Input
-                inputManager.HandleInput(selection, pathEditor, ref camera, simulation);
+                inputManager.HandleInput(selection, pathEditor, ref camera, simulation, mainUI.UIState);
                 
                 // Simulation
                 if (!mainUI.IsPaused)
@@ -72,27 +90,37 @@ namespace Fdp.Examples.CarKinem
                 
                 // World rendering
                 roadRenderer.RenderRoadNetwork(simulation.RoadNetwork, camera);
-                vehicleRenderer.RenderVehicles(simulation.View, camera, selection.SelectedEntityId);
-                
+                // Vehicles and Labels moved to ImGui pass
+
                 if (selection.SelectedEntityId.HasValue)
                 {
-                    // Assuming valid entity for now or need to fix selection to store Entity
-                    // We need to fetch generation or store Entity
-                    // For now, let's just skip if we can't find generation
+                    // Selection highlight handled in VehicleRenderer
                 }
                 
-                labelRenderer.RenderVehicleLabels(simulation.View, camera);
                 pathEditor.Render(camera);
                 
                 Raylib.EndMode2D();
                 
                 // UI
                 rlImGui.Begin();
+                
+                // Render World Objects using ImGui DrawLists (must be inside ImGui frame)
+                // Note: We still need Camera for World->Screen transform
+                vehicleRenderer.RenderVehicles(simulation.View, camera, selection.SelectedEntityId);
+                labelRenderer.RenderVehicleLabels(simulation.View, camera);
+                
                 mainUI.Render(simulation, selection);
                 rlImGui.End();
                 
                 Raylib.EndDrawing();
             }
+            
+            // Save window size before cleanup
+            try
+            {
+                File.WriteAllText("window_config.txt", $"{Raylib.GetScreenWidth()}\n{Raylib.GetScreenHeight()}");
+            }
+            catch { /* Ignore save errors */ }
             
             // Cleanup
             simulation.Dispose();

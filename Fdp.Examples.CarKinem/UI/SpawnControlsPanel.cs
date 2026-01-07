@@ -1,6 +1,7 @@
 using ImGuiNET;
 using System.Numerics;
 using Fdp.Examples.CarKinem.Simulation;
+using CarKinem.Core;
 
 namespace Fdp.Examples.CarKinem.UI
 {
@@ -9,14 +10,30 @@ namespace Fdp.Examples.CarKinem.UI
         private int _spawnCount = 10;
         private bool _randomMovement = true;
         
-        public void Render(DemoSimulation sim)
+        public void Render(DemoSimulation sim, UIState uiState)
         {
             ImGui.SliderInt("Spawn Count", ref _spawnCount, 1, 100);
             ImGui.Checkbox("Random Movement", ref _randomMovement);
             
+            // Vehicle class combo box
+            string[] classNames = new string[]
+            {
+                "Personal Car",
+                "Truck",
+                "Bus",
+                "Tank",
+                "Pedestrian"
+            };
+            
+            int selectedIndex = (int)uiState.SelectedVehicleClass;
+            if (ImGui.Combo("Vehicle Type", ref selectedIndex, classNames, classNames.Length))
+            {
+                uiState.SelectedVehicleClass = (VehicleClass)selectedIndex;
+            }
+            
             if (ImGui.Button("Spawn Vehicles"))
             {
-                SpawnVehicles(sim, _spawnCount, _randomMovement);
+                SpawnVehicles(sim, _spawnCount, _randomMovement, uiState.SelectedVehicleClass);
             }
             
             ImGui.SameLine();
@@ -26,10 +43,15 @@ namespace Fdp.Examples.CarKinem.UI
                 // sim.ClearAllVehicles(); // TODO: Implement Clear in Simulation
             }
             
-            // ImGui.Text($"Current Vehicles: {sim.GetVehicleCount()}"); // TODO: Implement Count
+            // Show vehicle class info
+            var preset = VehiclePresets.GetPreset(uiState.SelectedVehicleClass);
+            ImGui.Separator();
+            ImGui.Text($"Size: {preset.Length:F1}m x {preset.Width:F1}m");
+            ImGui.Text($"Max Speed: {preset.MaxSpeedFwd:F1} m/s");
+            ImGui.Text($"Max Turn: {(preset.MaxSteerAngle * 180 / MathF.PI):F0}°");
         }
         
-        private void SpawnVehicles(DemoSimulation sim, int count, bool randomMovement)
+        private void SpawnVehicles(DemoSimulation sim, int count, bool randomMovement, VehicleClass vehicleClass)
         {
             var rng = new Random();
             
@@ -46,7 +68,7 @@ namespace Fdp.Examples.CarKinem.UI
                 );
                 heading = Vector2.Normalize(heading);
                 
-                int entityIndex = sim.SpawnVehicle(pos, heading);
+                int entityIndex = sim.SpawnVehicle(pos, heading, vehicleClass);
                 
                 if (randomMovement)
                 {

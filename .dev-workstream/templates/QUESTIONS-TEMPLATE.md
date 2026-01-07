@@ -1,68 +1,192 @@
-# BATCH-{NN} - Questions
+# Questions & Clarifications
 
-**Batch:** BATCH-{NN} - {Batch Name}  
+**Batch Number:** BATCH-XX  
 **Developer:** [Your Name]  
-**Date:** YYYY-MM-DD
+**Date:** YYYY-MM-DD  
+**Status:** [OPEN / ANSWERED]
 
 ---
 
-## Question 1: {Short Title}
+## Question 1: [Brief Question Title]
 
-**Task:** TASK-XXX - {Task Name}
+### Context
+**What I'm trying to accomplish:**
+[Describe the task or feature you're working on]
 
-**Context:**
-{Explain the situation that led to this question}
+**Current situation:**
+[What you've done so far or what you're stuck on]
 
-**Question:**
-{Your specific question}
+### The Question
+[State your question clearly and specifically]
 
-**What I've Tried:**
-- {Approach 1 and result}
-- {Approach 2 and result}
+### Why This Matters
+[Explain the impact or blocker this creates]
 
-**Reference:**
-{Link to relevant design doc section, if applicable}
+### Options Considered
+**Option A:** [Description]
+- Pros: [List]
+- Cons: [List]
+
+**Option B:** [Description]
+- Pros: [List]
+- Cons: [List]
+
+### My Recommendation
+[If you have a preference, state it and why]
+
+### Code Reference
+```csharp
+// Relevant code snippet if applicable
+public class Example
+{
+    // Show the specific problem area
+}
+```
+
+**File:** `Path/To/File.cs:LineNumber`
+
+---
+
+## Question 2: [Brief Question Title]
+
+[Repeat structure above]
+
+---
+
+## Architecture Questions
+
+### Question: [Architectural Concern]
+
+**Scenario:**
+[Describe the architectural decision needed]
+
+**Design Document Reference:**
+[Point to specific section in design docs]
+
+**Conflict/Ambiguity:**
+[Explain what's unclear or contradictory]
 
 **Impact:**
-{Can you continue with other tasks while waiting for answer?}
+- **Scope:** [What systems are affected]
+- **Risk:** [Potential issues with each approach]
+
+**Proposed Solution:**
+[Your suggested approach with rationale]
 
 ---
 
-## Question 2: {Short Title}
+## Integration Questions
 
-**Task:** TASK-XXX - {Task Name}
+### Question: [Integration Point Unclear]
 
-**Context:**
-{Explain the situation}
+**Existing System:**
+[Describe the system you need to integrate with]
+
+**Integration Need:**
+[What you need to do]
+
+**Unclear Aspect:**
+[What's not clear about how to integrate]
+
+**Attempted Approaches:**
+1. [What you tried and what happened]
+2. [Second attempt and result]
+
+**Blocking Work:**
+- [ ] Task X
+- [ ] Task Y
+
+---
+
+## Performance Questions
+
+### Question: [Performance Target Concern]
+
+**Requirement:**
+[State the performance target from specs]
+
+**Current Measurement:**
+[Your benchmark results]
+
+**Gap:**
+[How far from target]
+
+**Optimization Attempts:**
+1. [What you tried] → [Result]
+2. [What you tried] → [Result]
 
 **Question:**
-{Your specific question}
-
-**Options Considered:**
-1. **Option A:** {Description}
-   - Pros: {List}
-   - Cons: {List}
-
-2. **Option B:** {Description}
-   - Pros: {List}
-   - Cons: {List}
-
-**Recommendation:**
-{Your preferred approach and why}
-
-**Need from Manager:**
-{Specific decision or clarification needed}
+[Is the target realistic? Should we adjust? Need different approach?]
 
 ---
 
-## Question 3: {Short Title}
+## Specification Ambiguity
 
-{Repeat for each question}
+### Question: [Spec Unclear or Contradictory]
+
+**Specification Says:**
+> [Quote relevant section from design doc or instructions]
+
+**Ambiguity:**
+[Explain what's unclear or contradictory]
+
+**Interpretation A:**
+[One way to read it]
+
+**Interpretation B:**
+[Another way to read it]
+
+**Which is correct?**
 
 ---
 
-**Total Questions:** {X}
+## Quick Questions
 
-**Urgency:**
-- {X} blocking progress
-- {Y} can wait for batch review
+> For minor clarifications that don't need full section above
+
+### Q: [Question]
+**Answer needed on:** [Topic]
+
+### Q: [Question]
+**Answer needed on:** [Topic]
+
+---
+
+## Blockers Summary
+
+**Critical Blockers:** [Count]
+- Question #X: [Brief description]
+
+**Non-Critical:** [Count]
+- Question #Y: [Can proceed with assumption, but need confirmation]
+
+**Assumptions Made:**
+> List any assumptions you're proceeding with while waiting for answers
+
+1. Assumption: [What you're assuming]
+   - **Risk if wrong:** [Impact]
+   - **Can revert if needed:** [Yes/No]
+
+---
+
+## Dev Lead Response Section
+
+> Dev Lead will fill this section
+
+### Answer to Question 1:
+[Answer]
+
+**Action:** [What developer should do]
+
+---
+
+### Answer to Question 2:
+[Answer]
+
+**Action:** [What developer should do]
+
+---
+
+**Answered By:** [Dev Lead Name]  
+**Date:** YYYY-MM-DD  
+**Developer can proceed:** [YES / NO / PARTIAL]

@@ -1,51 +1,44 @@
-using ImGuiNET;
-using Fdp.Examples.CarKinem.Simulation;
+using System;
 using Fdp.Kernel;
+using ImGuiNET;
+using Fdp.Examples.CarKinem.Input;
 
 namespace Fdp.Examples.CarKinem.UI
 {
     public class InspectorPanel
     {
-        public void Render(DemoSimulation sim, int entityId)
-        {
-            ImGui.Begin("Inspector");
-            ImGui.Text($"Entity ID: {entityId}");
-            ImGui.Separator();
+        private EntityInspector _entityInspector = new();
+        private EventInspector _eventInspector = new();
 
-            // We construct an Entity handle. Brittle but works for demo context if alive.
-            var entity = new Entity(entityId, 1); // Generation 1 assumption
-            // Realistically we should look it up or pass the actual Entity struct from selection
-            
-            if (sim.View.IsAlive(entity))
+        public void Render(EntityRepository repository, SelectionManager selectionManager)
+        {
+            if (!ImGui.Begin("Inspector"))
             {
-                 if (sim.View.HasComponent<global::CarKinem.Core.VehicleState>(entity))
-                 {
-                     var state = sim.View.GetComponentRO<global::CarKinem.Core.VehicleState>(entity);
-                     if (ImGui.TreeNode("Vehicle State"))
-                     {
-                         ImGui.Text($"Pos: {state.Position:F2}");
-                         ImGui.Text($"Speed: {state.Speed:F2}");
-                         ImGui.Text($"Steer: {state.SteerAngle:F2}");
-                         ImGui.TreePop();
-                     }
-                 }
-                 
-                 if (sim.View.HasComponent<global::CarKinem.Core.NavState>(entity))
-                 {
-                     var nav = sim.View.GetComponentRO<global::CarKinem.Core.NavState>(entity);
-                     if (ImGui.TreeNode("Navigation"))
-                     {
-                         ImGui.Text($"Mode: {nav.Mode}");
-                         ImGui.Text($"Target Speed: {nav.TargetSpeed:F2}");
-                         ImGui.TreePop();
-                     }
-                 }
+                ImGui.End();
+                return;
             }
-            else
+
+            if (ImGui.BeginTabBar("InspectorTabs"))
             {
-                ImGui.TextColored(new System.Numerics.Vector4(1,0,0,1), "Entity Destroyed or Invalid Handle");
+                if (ImGui.BeginTabItem("Components"))
+                {
+                    _entityInspector.SetContext(repository, selectionManager);
+                    _entityInspector.Update();
+                    _entityInspector.DrawImGui();
+                    ImGui.EndTabItem();
+                }
+
+                if (ImGui.BeginTabItem("Global Events"))
+                {
+                    _eventInspector.SetEventBus(repository.Bus);
+                    _eventInspector.Update(); 
+                    _eventInspector.DrawImGui();
+                    ImGui.EndTabItem();
+                }
+
+                ImGui.EndTabBar();
             }
-            
+
             ImGui.End();
         }
     }
