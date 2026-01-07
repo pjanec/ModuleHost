@@ -25,7 +25,8 @@ namespace ModuleHost.Core.Providers
             EntityRepository liveWorld, 
             EventAccumulator eventAccumulator,
             BitMask256 componentMask,
-            Action<EntityRepository>? schemaSetup = null)
+            Action<EntityRepository>? schemaSetup = null,
+            int initialPoolSize = 5)
         {
             _liveWorld = liveWorld ?? throw new ArgumentNullException(nameof(liveWorld));
             _eventAccumulator = eventAccumulator ?? throw new ArgumentNullException(nameof(eventAccumulator));
@@ -33,8 +34,8 @@ namespace ModuleHost.Core.Providers
             _schemaSetup = schemaSetup;
             _pool = new ConcurrentStack<EntityRepository>();
             
-            // Warmup: Pre-allocate 2 snapshots to avoid first-run allocation
-            WarmupPool(2);
+            // Warmup: Pre-allocate snapshots from config
+            WarmupPool(initialPoolSize);
         }
         
         public SnapshotProviderType ProviderType => SnapshotProviderType.SoD;

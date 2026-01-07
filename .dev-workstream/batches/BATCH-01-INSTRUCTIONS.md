@@ -113,26 +113,68 @@ public void ModuleEntry_LastRunTick_TracksCorrectly()
 
 **Required Changes:**
 
+**CRITICAL ARCHITECTURAL DECISION:**
+
+ModuleHost.Update() must own the **complete frame lifecycle**. The user's game loop should just call:
+```csharp
+void GameLoop()
+{
+    _moduleHost.Update(GetDeltaTime());
+}
+```
+
+This ensures correct ordering and prevents user errors (forgetting Tick() or SwapBuffers()).
+
 1. **Modify `Update()` method flow:**
    ```
-   OLD:
-   1. Capture events
-   2. Update providers
-   3. Dispatch all modules
-   4. WaitAll (BLOCKS HERE)
-   5. Execute phases
+   OLD (Error-Prone):
+   User manually calls _repo.Tick(), ProcessInput(), _repo.Bus.SwapBuffers()
+   Then calls ModuleHost.Update()
    
-   NEW:
-   1. Execute Input phase (global systems)
-   2. Execute BeforeSync phase
-   3. Capture events
-   4. Update FrameSynced providers
-   5. HARVEST PHASE: Check completed async tasks
-   6. DISPATCH PHASE: Start new tasks (non-blocking)
-   7. Wait ONLY for FrameSynced tasks
-   8. Harvest FrameSynced immediately
-   9. Execute PostSimulation phase
-   10. Execute Export phase
+   NEW (ModuleHost Owns Everything):
+   1. TICK WORLD
+      - _liveWorld.Tick()  // Increment GlobalVersion
+      - CRITICAL: Must happen FIRST for change detection
+      
+   2. INPUT PHASE
+      - Execute systems marked [UpdateInPhase(SystemPhase.Input)]
+      - InputSystem, NetworkIngestSystem, etc.
+      
+   3. EVENT SWAP
+      - _liveWorld.Bus.SwapBuffers()
+      - CRITICAL: AFTER Input, BEFORE Simulation
+      - Makes input events visible to simulation
+      
+   4. BEFORE-SYNC PHASE
+      - Execute systems marked [UpdateInPhase(SystemPhase.BeforeSync)]
+      - Entity lifecycle, etc.
+      
+   5. HARVEST PHASE
+      - Check completed async tasks from previous frames
+      - Playback commands, release views
+      
+   6. SYNC PHASE
+      - Update FrameSynced providers (GDB)
+      - Check reactive triggers
+      
+   7. SIMULATION PHASE
+      - Execute systems marked [UpdateInPhase(SystemPhase.Simulation)]
+      - Physics, AI logic, etc.
+      
+   8. DISPATCH PHASE
+      - Start new module tasks (non-blocking for Async)
+      - Wait ONLY for FrameSynced tasks
+      - Harvest FrameSynced immediately
+      
+   9. POST-SIMULATION PHASE
+      - Execute systems marked [UpdateInPhase(SystemPhase.PostSimulation)]
+      
+   10. EXPORT PHASE
+       - Execute systems marked [UpdateInPhase(SystemPhase.Export)]
+       - NetworkSyncSystem, etc.
+       
+   11. COMMAND BUFFER FLUSH
+       - Apply deferred changes
    ```
 
 2. **Harvest Logic (for each module with CurrentTask):**
@@ -161,6 +203,15 @@ public void ModuleEntry_LastRunTick_TracksCorrectly()
    - Immediately harvest them (they're completed now)
 
 **Acceptance Criteria:**
+- [ ] **Tick() called at start of Update()** (CRITICAL)
+- [ ] **SwapBuffers() called after Input, before Simulation** (CRITICAL)
+- [ ] Main thread no longer blocks on async modules
+- [ ] Async modules can span multiple frames
+- [ ] FrameSynced modules still execute synchronously
+- [ ] Commands harvested in correct order
+- [ ] Accumulated delta time calculated properly
+- [ ] Frame counter increments correctly
+- [ ] **User game loop is just one call to Update()**
 - [ ] Main thread no longer blocks on async modules
 - [ ] Async modules can span multiple frames
 - [ ] FrameSynced modules still execute synchronously
@@ -256,6 +307,22 @@ public void FrameTimeVariance_WithSlowModules()
    - **Verify:** `ReleaseView()` decrements correctly
    - **Verify:** Snapshot only returned to pool when count == 0
    - **Test:** One module holds for 10 frames while another finishes quickly
+
+**⚠️ IMPORTANT: Transient Component Handling**
+
+Providers call `SyncFrom()` to create snapshots. By default, `SyncFrom(mask: null)` should **exclude transient components**:
+
+- **Transient Components:** Mutable managed components marked with `[TransientComponent]` or registered with `snapshotable: false`
+- **Examples:** `UIRenderCache`, `TempCalculationBuffer`, `DebugVisualization`
+- **Thread Safety:** These components are **main-thread only** and must never be copied to background worlds
+- **Implementation:** `SyncFrom()` should default to `GetSnapshotableMask()` which excludes transient components
+
+**If you encounter mutable managed components during testing:**
+1. verify they are properly marked as transient
+2. Ensure `SyncFrom()` is excluding them
+3. Confirm they're only accessed by Main Thread modules (Synchronous mode)
+
+See design document Chapter 1, Section 1.3 for full details on transient component filtering.
 
 **Acceptance Criteria:**
 - [ ] OnDemandProvider pool configurable

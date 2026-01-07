@@ -1,6 +1,7 @@
 // File: ModuleHost.Core/Providers/SharedSnapshotProvider.cs
 using System;
 using System.Threading;
+using System.Collections.Generic;
 using Fdp.Kernel;
 using ModuleHost.Core.Abstractions;
 
@@ -9,6 +10,7 @@ namespace ModuleHost.Core.Providers
     /// <summary>
     /// Shared snapshot provider (convoy pattern).
     /// Multiple modules share one snapshot with reference counting.
+    /// Supports async execution by detaching busy snapshots.
     /// </summary>
     public sealed class SharedSnapshotProvider : ISnapshotProvider, IDisposable
     {
@@ -18,8 +20,12 @@ namespace ModuleHost.Core.Providers
         private readonly int _expectedModuleCount;
         private readonly Action<EntityRepository>? _schemaSetup;
         
-        private EntityRepository? _sharedSnapshot;
-        private int _referenceCount;
+        // Active snapshots and their ref counts.
+        private readonly Dictionary<ISimulationView, int> _activeSnapshots = new();
+        
+        // The snapshot currently available for this frame (if any).
+        private EntityRepository? _currentRecyclableSnapshot;
+        
         private uint _lastSeenTick;
         private readonly object _syncLock = new object();
         
@@ -46,11 +52,29 @@ namespace ModuleHost.Core.Providers
         {
             lock (_syncLock)
             {
-                if (_sharedSnapshot != null)
+                if (_currentRecyclableSnapshot != null)
                 {
-                    // Sync shared snapshot
-                    _sharedSnapshot.SyncFrom(_liveWorld, _componentMask);
-                    _eventAccumulator.FlushToReplica(_sharedSnapshot.Bus, _lastSeenTick);
+                    // Check if it's currently in use (leased by previous frame modules)
+                    if (_activeSnapshots.TryGetValue(_currentRecyclableSnapshot, out var count) && count > 0)
+                    {
+                        // It's busy. Detach it from being "current".
+                        // We will create a new one for this frame on next Acquire.
+                        // The old one remains in _activeSnapshots until released.
+                        _currentRecyclableSnapshot = null;
+                        
+                        // _lastSeenTick remains valid as the "start of this frame" trigger
+                    }
+                    else
+                    {
+                        // It's free. Reuse and update it.
+                        _currentRecyclableSnapshot.SyncFrom(_liveWorld, _componentMask);
+                        _eventAccumulator.FlushToReplica(_currentRecyclableSnapshot.Bus, _lastSeenTick);
+                        _lastSeenTick = _liveWorld.GlobalVersion;
+                    }
+                }
+                else
+                {
+                    // Update tick reference so new snapshots get correct event range
                     _lastSeenTick = _liveWorld.GlobalVersion;
                 }
             }
@@ -64,43 +88,64 @@ namespace ModuleHost.Core.Providers
         {
             lock (_syncLock)
             {
-                // First acquire? Create and sync
-                if (_sharedSnapshot == null)
+                // Create or reuse
+                if (_currentRecyclableSnapshot == null)
                 {
-                    _sharedSnapshot = new EntityRepository();
-                    _schemaSetup?.Invoke(_sharedSnapshot);
+                    _currentRecyclableSnapshot = new EntityRepository();
+                    _schemaSetup?.Invoke(_currentRecyclableSnapshot);
                     
-                    _sharedSnapshot.SyncFrom(_liveWorld, _componentMask);
-                    _eventAccumulator.FlushToReplica(_sharedSnapshot.Bus, _lastSeenTick);
-                    _lastSeenTick = _liveWorld.GlobalVersion;
+                    _currentRecyclableSnapshot.SyncFrom(_liveWorld, _componentMask);
+                    _eventAccumulator.FlushToReplica(_currentRecyclableSnapshot.Bus, _lastSeenTick);
+                    
+                    // Track it
+                    _activeSnapshots[_currentRecyclableSnapshot] = 0;
                 }
                 
-                // Increment ref count (thread-safe)
-                Interlocked.Increment(ref _referenceCount);
-                
-                return _sharedSnapshot;
+                _activeSnapshots[_currentRecyclableSnapshot]++;
+                return _currentRecyclableSnapshot;
             }
         }
         
         /// <summary>
         /// Releases view (decrements ref count).
-        /// When count reaches 0, disposes shared snapshot.
+        /// When count reaches 0, disposes/soft-clears logic applied.
         /// </summary>
         public void ReleaseView(ISimulationView view)
         {
             lock (_syncLock)
             {
-                _referenceCount--;
-                
-                if (_referenceCount == 0)
+                if (_activeSnapshots.ContainsKey(view))
                 {
-                    _sharedSnapshot?.SoftClear();
-                    _sharedSnapshot?.Dispose();
-                    _sharedSnapshot = null;
-                }
-                else if (_referenceCount < 0)
-                {
-                     throw new InvalidOperationException("ReleaseView called more times than AcquireView");
+                    _activeSnapshots[view]--;
+                    
+                    if (_activeSnapshots[view] <= 0)
+                    {
+                        if (view != _currentRecyclableSnapshot)
+                        {
+                            // It was detached (from an old frame) and now everyone is done with it.
+                            // Fully dispose it.
+                             if (view is EntityRepository repo)
+                             {
+                                 try { repo.Dispose(); } catch {} // Paramoid safety
+                             }
+                             _activeSnapshots.Remove(view);
+                        }
+                        else
+                        {
+                            // It is the current recyclable snapshot.
+                            // Keep it alive, but verify state?
+                            // Logic: it is kept in _currentRecyclableSnapshot and _activeSnapshots (count 0).
+                            if (view is EntityRepository repo)
+                            {
+                                repo.SoftClear();
+                            }
+                        }
+                    }
+                    else if (_activeSnapshots[view] < 0)
+                    {
+                         // Should not happen
+                         _activeSnapshots[view] = 0;
+                    }
                 }
             }
         }
@@ -109,8 +154,12 @@ namespace ModuleHost.Core.Providers
         {
             lock (_syncLock)
             {
-                _sharedSnapshot?.Dispose();
-                _sharedSnapshot = null;
+                foreach (var kvp in _activeSnapshots)
+                {
+                    if (kvp.Key is IDisposable d) d.Dispose();
+                }
+                _activeSnapshots.Clear();
+                _currentRecyclableSnapshot = null;
             }
         }
     }

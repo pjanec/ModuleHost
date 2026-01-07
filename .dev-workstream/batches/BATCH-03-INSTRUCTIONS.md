@@ -330,6 +330,37 @@ public sealed class SharedSnapshotProvider : ISnapshotProvider, IDisposable
 }
 ```
 
+**⚠️ IMPORTANT: Transient Component Filtering**
+
+When calculating the union mask for a convoy, ensure that **transient components are excluded**:
+
+- **Union Mask Calculation:** Should only include snapshotable components
+- **Flight Recorder:** Uses `AllSnapshotable` mask (excludes transient)
+- **SyncFrom Default:** If `mask` parameter is `null`, should default to snapshotable-only mask
+
+**Implementation Note:**
+```csharp
+// In AutoAssignProviders when creating SharedSnapshotProvider
+var unionMask = new BitMask256();
+foreach (var entry in moduleList)
+{
+    var mask = GetComponentMask(entry.Module);
+    // mask should already exclude transient components
+    unionMask.BitwiseOr(mask);
+}
+
+// SyncFrom call in SharedSnapshotProvider.AcquireView()
+_currentSnapshot.SyncFrom(_liveWorld, _unionMask);
+// unionMask should NOT include transient components
+```
+
+**Why This Matters:**
+- **Thread Safety:** Transient (mutable) components must NEVER be accessed by background threads
+- **Memory:** Avoids copying heavy caches (UIRenderCache) that don't need to be snapshotted
+- **Correctness:** Prevents torn reads of mutable state
+
+See design document Chapter 1, Section 1.3 for full details on transient component architecture.
+
 **Acceptance Criteria:**
 - [ ] Union mask parameter added to constructor
 - [ ] Pool parameter added to constructor

@@ -151,12 +151,12 @@ namespace Fdp.Examples.CarKinem.Simulation
             // SingleStep = false; // logic replaced by decrement above
             
             // Required for Versioning to work with AsyncRecorder
-            _repository.Tick();
-
+            // _repository.Tick(); // Handled by _kernel.Update
+            
             // Swap events (Input -> Current)
-            _repository.Bus.SwapBuffers();
+            // _repository.Bus.SwapBuffers(); // Handled by _kernel.Update
 
-            // Update Kernel first to process/swap events
+            // Update Kernel (Handling Tick, Input, Swap, Capture, Dispatch)
             _kernel.Update(deltaTime);
 
             ref var time = ref _repository.GetSingletonUnmanaged<GlobalTime>();

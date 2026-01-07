@@ -39,6 +39,14 @@ namespace ModuleHost.Core.Abstractions
         }
 
         /// <summary>
+        /// Execution policy (FrameSynced vs Async).
+        /// Default implementation maps Tier.Fast -> FrameSynced, Tier.Slow -> Async.
+        /// </summary>
+        ModuleExecutionPolicy Policy => Tier == ModuleTier.Fast 
+            ? ModuleExecutionPolicy.DefaultFast 
+            : ModuleExecutionPolicy.DefaultSlow;
+
+        /// <summary>
         /// Main module execution method.
         /// Called on background thread with read-only simulation view.
         /// 

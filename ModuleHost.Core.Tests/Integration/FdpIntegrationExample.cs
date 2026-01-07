@@ -69,6 +69,9 @@ namespace ModuleHost.Core.Tests.Integration
                 // - Dispatches modules (async)
                 moduleHost.Update(deltaTime);
                 
+                // Allow async modules to run
+                System.Threading.Thread.Sleep(10);
+                
                 // Phase 3: Command Processing (main thread)
                 // - Process commands from modules
                 // - Apply to liveWorld

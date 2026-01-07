@@ -108,31 +108,203 @@ private class ModuleEntry
 
 **Execution Flow:**
 
+**CRITICAL: ModuleHost Owns Complete Frame Lifecycle**
+
+The application's game loop should make **one call**:
+```csharp
+void GameLoop()
+{
+    float dt = GetDeltaTime();
+    _moduleHost.Update(dt); // ONE CALL - handles everything
+}
+```
+
+**ModuleHost.Update() Internal Flow:**
+
 ```
 Update(deltaTime):
-  1. HARVEST PHASE
-     - For each module with CurrentTask:
-       - If IsCompleted: Playback commands, ReleaseView, reset state
-       - Else: Skip (still running), accumulate time
-       
-  2. SYNC PHASE
-     - Update all FrameSynced providers (GDB sync)
-     - Check Async triggers for SoD updates
-     
-  3. DISPATCH PHASE
-     - For each idle module that ShouldRun:
-       - AcquireView (creates World C if needed)
-       - Task.Run(module.Tick)
-       - If FrameSynced: add to waitList
-     - WaitAll(waitList) for synchronized modules only
-     - Harvest FrameSynced modules immediately
+   1. TICK WORLD (Advance Time)
+      - _liveWorld.Tick()  // Increment GlobalVersion
+      - CRITICAL: Must happen first for change detection
+      
+   2. INPUT PHASE (Main Thread Systems)
+      - Execute systems marked [UpdateInPhase(SystemPhase.Input)]
+      - Input, NetworkIngestSystem, etc.
+      
+   3. EVENT SWAP (Make Events Visible)
+      - _liveWorld.Bus.SwapBuffers()
+      - CRITICAL: Happens AFTER Input, BEFORE Simulation
+      - Makes input events visible to simulation systems
+   
+   4. BEFORE-SYNC PHASE
+      - Execute systems marked [UpdateInPhase(SystemPhase.BeforeSync)]
+      - Entity lifecycle coordination, etc.
+      
+   5. HARVEST PHASE (Async Modules from Previous Frames)
+      - For each module with CurrentTask:
+        - If IsCompleted: Playback commands, ReleaseView, reset state
+        - Else: Skip (still running), accumulate time
+        
+   6. SYNC PHASE (Update Replicas)
+      - Update all FrameSynced providers (GDB sync)
+      - Check reactive triggers for module wake-up
+      
+   7. SIMULATION PHASE (Main Thread Systems)
+      - Execute systems marked [UpdateInPhase(SystemPhase.Simulation)]
+      - Physics, AI logic, etc.
+      
+   8. DISPATCH PHASE (Launch Modules)
+      - For each idle module that ShouldRun:
+        - AcquireView (creates World C if needed)
+        - Task.Run(module.Tick)
+        - If FrameSynced: add to waitList
+      - WaitAll(waitList) for synchronized modules only
+      - Harvest FrameSynced modules immediately
+      
+   9. POST-SIMULATION PHASE (Main Thread Systems)
+      - Execute systems marked [UpdateInPhase(SystemPhase.PostSimulation)]
+      - Animation, transforms, etc.
+      
+  10. EXPORT PHASE (Final Output)
+      - Execute systems marked [UpdateInPhase(SystemPhase.Export)]
+      - NetworkSyncSystem, RenderPrepSystem, etc.
+      
+  11. COMMAND BUFFER FLUSH
+      - Apply deferred component changes
+      - Publish deferred events
 ```
+
+**Why This Matters:**
+
+1. **User Simplicity:** Application code just calls `Update(dt)`
+2. **Correct Ordering:** Tick → Input → Swap → Sync is guaranteed
+3. **No User Errors:** Can't forget Tick() or Swap() anymore
+4. **Encapsulation:** ModuleHost is the true kernel
+
+**Anti-Pattern (Old Way - DON'T DO THIS):**
+```csharp
+// ❌ User manually orchestrating (error-prone)
+void GameLoop()
+{
+    _repo.Tick();
+    ProcessInput();
+    _repo.Bus.SwapBuffers();
+    _moduleHost.Update(dt);
+    // Easy to forget Tick() or Swap() or get ordering wrong!
+}
+```
+
+**Correct Pattern (New Way):**
+```csharp
+// ✅ ModuleHost handles everything
+void GameLoop()
+{
+    _moduleHost.Update(dt);
+}
+```
+
 
 **Provider Implications:**
 
 - **OnDemandProvider:** Already supports pooling; increase pool size for concurrency
 - **SharedSnapshotProvider:** Reference counting ensures snapshot stays alive while any module uses it
 - **DoubleBufferProvider:** May need triple-buffer variant if slow modules need persistent replicas
+
+### 1.3 Transient Components & Snapshot Filtering
+
+**Problem:** Some components are transient/mutable and should never be snapshotted.
+
+**Examples:**
+- `UIRenderCache` - Heavy, mutable, UI-only
+- `TempCalculationBuffer` - Intermediate computation state
+- `DebugVisualization` - Editor-only data
+
+**Safety Rule:** Mutable managed components must **NEVER** be accessed by background modules (World B/C) because shallow copy is not thread-safe.
+
+**Solution: Transient Component Marking**
+
+Components can be marked as "transient" to exclude them from all snapshots:
+
+**Option A: Attribute (Recommended)**
+```csharp
+[TransientComponent]
+public class UIRenderCache 
+{ 
+    public Dictionary<int, Texture> Cache; // Safe: main-thread only
+}
+```
+
+**Option B: Registration Flag**
+```csharp
+repo.RegisterManagedComponent<UIRenderCache>(snapshotable: false);
+```
+
+**Implementation:**
+
+1. **ComponentTypeRegistry** tracks `IsSnapshotable` flag per type
+2. **Default Mask:** `SyncFrom()` without explicit mask uses `AllSnapshotable` (excludes transient)
+3. **Flight Recorder:** Uses `AllSnapshotable` mask automatically
+4. **Convoy Providers:** Use `AllSnapshotable` for union mask calculation
+
+**Benefits:**
+- Makes mutable components safe (main-thread only)
+- Reduces snapshot size (excludes heavy caches)
+- Simplifies Flight Recorder (no torn reads)
+- Explicit contract (code documents thread-safety)
+
+**Component Registration:**
+```csharp
+// In EntityRepository initialization
+public void RegisterComponent<T>(bool snapshotable = true) where T : struct
+{
+    var typeId = ComponentRegistry.GetOrCreateId<T>();
+    ComponentRegistry.SetSnapshotable(typeId, snapshotable);
+}
+
+public void RegisterManagedComponent<T>(bool snapshotable = true) where T : class
+{
+    var typeId = ComponentRegistry.GetOrCreateManagedId<T>();
+    ComponentRegistry.SetSnapshotable(typeId, snapshotable);
+}
+```
+
+**SyncFrom Update:**
+```csharp
+public void SyncFrom(EntityRepository source, BitMask256? mask = null)
+{
+    // Default to snapshotable components only
+    var effectiveMask = mask ?? GetSnapshotableMask();
+    
+    // Sync only components in effective mask
+    // ...
+}
+
+private BitMask256 GetSnapshotableMask()
+{
+    var mask = new BitMask256();
+    foreach (var typeId in ComponentRegistry.GetAllTypes())
+    {
+        if (ComponentRegistry.IsSnapshotable(typeId))
+        {
+            mask.SetBit(typeId);
+        }
+    }
+    return mask;
+}
+```
+
+**Flight Recorder Integration:**
+```csharp
+// FlightRecorderModule automatically excludes transient components
+var gdbProvider = new DoubleBufferProvider(
+    _liveWorld,
+    _eventAccumulator,
+    mask: null, // Will default to AllSnapshotable
+    _schemaSetup
+);
+```
+
+This pattern ensures **mutable managed components are safe** by making them explicitly **World A only**.
 
 ---
 
@@ -162,15 +334,17 @@ Update(deltaTime):
 
 **Architecture Changes:**
 
-1. **Component Dirty Tracking**
-   - Add `uint LastWriteTick` to `IComponentTable` interface
-   - Update on every `Set()` or `GetRW()` call
-   - Atomic write (single integer, aligned)
+1. **Component Dirty Tracking (Coarse-Grained)**
+   - **CRITICAL:** Do NOT write to a shared `LastWriteTick` field on every `Set()/GetRW()` - causes false sharing and cache contention
+   - **Lazy Scan Approach:** Add `HasChanges(uint sinceVersion)` method to `IComponentTable`
+   - Scans chunk version array on-demand during trigger check (10-50ns for 100k entities)
+   - Called once per module per frame, not on every component write
 
 2. **Event Tracking**
    - Add `HashSet<int> _activeEventIds` to `FdpEventBus`
    - Populate during `Publish()`, clear during `SwapBuffers()`
-   - Fast lookup via hash set
+   - Optional: Add `_anyEventPublished` flag for early-out optimization
+   - Fast lookup via hash set O(1)
 
 3. **Module Metadata**
    - Extend `IModule` with `WatchComponents` and `WatchEvents` properties
@@ -189,19 +363,43 @@ public interface IModule
     IReadOnlyList<Type>? WatchEvents { get; }
 }
 
+// IComponentTable additions (FDP change)
+public interface IComponentTable
+{
+    // Existing...
+    
+    // NEW: Lazy scan for changes
+    bool HasChanges(uint sinceVersion);
+}
+
+// NativeChunkTable<T> implementation
+public bool HasChanges(uint sinceVersion)
+{
+    // Fast L1 cache scan of chunk versions
+    // 100k entities = ~100 chunks, 100 int reads = 10-50ns
+    for (int i = 0; i < _totalChunks; i++)
+    {
+        if (_chunkVersions[i].Value > sinceVersion)
+            return true;
+    }
+    return false;
+}
+
 // EntityRepository additions
 public bool HasComponentChanged(Type componentType, uint sinceTick)
 {
     if (_componentTables.TryGetValue(componentType, out var table))
-        return table.LastWriteTick > sinceTick;
+        return table.HasChanges(sinceTick);
     return false;
 }
 
 // FdpEventBus additions
 private readonly HashSet<int> _activeEventIds = new();
+private bool _anyEventPublished; // Early-out optimization
 
 public bool HasEvent(Type eventType)
 {
+    if (!_anyEventPublished) return false; // Fast path
     int id = GetEventTypeId(eventType);
     return _activeEventIds.Contains(id);
 }
@@ -217,17 +415,22 @@ private bool ShouldRunThisFrame(ModuleEntry entry)
     bool timerDue = (entry.FramesSinceLastRun + 1) >= freq;
     if (timerDue) return true;
     
-    // 2. Event triggers (NEW)
-    if (entry.WatchEvents != null)
+    // 2. Event triggers (NEW - high priority)
+    if (entry.WatchEvents != null && entry.WatchEvents.Count > 0)
+    {
         foreach (var evtType in entry.WatchEvents)
             if (_liveWorld.Bus.HasEvent(evtType))
                 return true;
+    }
     
-    // 3. Component triggers (NEW)
-    if (entry.WatchComponents != null)
+    // 3. Component triggers (NEW - scan-based)
+    if (entry.WatchComponents != null && entry.WatchComponents.Count > 0)
+    {
+        uint lastRunTick = entry.LastRunTick;
         foreach (var compType in entry.WatchComponents)
-            if (_liveWorld.HasComponentChanged(compType, entry.LastRunTick))
+            if (_liveWorld.HasComponentChanged(compType, lastRunTick))
                 return true;
+    }
     
     return false;
 }
@@ -235,9 +438,11 @@ private bool ShouldRunThisFrame(ModuleEntry entry)
 
 **Performance Optimization:**
 - Cache Type→ID mappings during `Initialize()` to avoid reflection in hot path
-- Component checks use single integer comparison (LastWriteTick)
-- Event checks use HashSet lookup O(1)
+- Component checks use lazy scan (only when module might run)
+- Scan is L1-cache-friendly: ~100 sequential int reads for 100k entities
+- Event checks use HashSet lookup O(1) with early-out flag
 - No entity iteration required
+- **Avoids false sharing:** No writes to shared memory during component updates
 
 ---
 

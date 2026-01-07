@@ -7,6 +7,10 @@ using ModuleHost.Core.Abstractions;
 using ModuleHost.Core.Providers;
 using ModuleHost.Core.Scheduling;
 
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("ModuleHost.Core.Tests")]
+
 namespace ModuleHost.Core
 {
     /// <summary>
@@ -103,21 +107,24 @@ namespace ModuleHost.Core
         /// Main update loop (called every simulation frame).
         /// 1. Captures event history
         /// 2. Updates providers (syncs replicas/snapshots)
-        /// 3. Dispatches modules (async execution)
+        /// 3. Harvester: Checks for completed async modules
+        /// 4. Dispatcher: Schedules new module execution
         /// </summary>
         public void Update(float deltaTime)
         {
             if (!_initialized)
                 throw new InvalidOperationException("Must call Initialize() before Update()");
             
+            // 1. ADVANCE TIME
+            _liveWorld.Tick();
+
             // ═══════════ PHASE: Input ═══════════
             _globalScheduler.ExecutePhase(SystemPhase.Input, _liveWorld, deltaTime);
             
             // ═══════════ PHASE: BeforeSync ═══════════
             _globalScheduler.ExecutePhase(SystemPhase.BeforeSync, _liveWorld, deltaTime);
             
-            // FLUSH LIVE WORLD BUFFERS (Architectural Fix)
-            // Ensure commands from Input/BeforeSync phases (main thread) are processed.
+            // FLUSH LIVE WORLD BUFFERS
             if (_liveWorld._perThreadCommandBuffer != null)
             {
                 foreach (var cmdBuffer in _liveWorld._perThreadCommandBuffer.Values)
@@ -128,38 +135,58 @@ namespace ModuleHost.Core
                     }
                 }
             }
-
-            // Capture event history for this frame
-            _eventAccumulator.CaptureFrame(_liveWorld.Bus, _currentFrame);
             
-            // Update all providers (sync point)
+            // 3. EVENT SWAP (Critical: Make Input events visible)
+            _liveWorld.Bus.SwapBuffers();
+            
+            // 4. SYNC & CAPTURE
+            // Capture event history
+            // Use GlobalVersion to align with SnapshotProvider logic which tracks GlobalVersion
+            _eventAccumulator.CaptureFrame(_liveWorld.Bus, _liveWorld.GlobalVersion);
+            
+            // Update Sync-Point Providers
             foreach (var entry in _modules)
             {
                 entry.Provider.Update();
             }
             
-            // Dispatch modules
-            var tasks = new List<Task>();
+            // ═══════════ HARVEST PHASE ═══════════
+            foreach (var entry in _modules)
+            {
+                // Harvest completed async tasks
+                if (entry.CurrentTask != null && entry.CurrentTask.IsCompleted)
+                {
+                    HarvestEntry(entry);
+                }
+            }
+            
+            // ═══════════ DISPATCH PHASE ═══════════
+            var tasksToWait = new List<Task>();
             
             foreach (var entry in _modules)
             {
-                // ⚠️ CRITICAL: Accumulate time for ALL modules
-                if (!_accumulatedTime.ContainsKey(entry.Module))
-                    _accumulatedTime[entry.Module] = 0f;
+                // Always accumulate time (logic time)
+                entry.AccumulatedDeltaTime += deltaTime;
                 
-                _accumulatedTime[entry.Module] += deltaTime;
+                // If still running, let it continue (accumulating time for next run)
+                if (entry.CurrentTask != null)
+                {
+                    continue;
+                }
                 
-                // Check if module should run this frame
+                // If idle, check frequency
                 if (ShouldRunThisFrame(entry))
                 {
                     // Acquire view
                     var view = entry.Provider.AcquireView();
-                    entry.LastView = view; // NEW: Track for playback
+                    entry.LeasedView = view;
+                    entry.LastView = view; // Keep for reference if needed
                     
-                    // ⚠️ CRITICAL: Pass accumulated time, not frame time
-                    float moduleDelta = _accumulatedTime[entry.Module];
+                    // Consume accumulated time for this tick
+                    float moduleDelta = entry.AccumulatedDeltaTime;
+                    entry.AccumulatedDeltaTime = 0f;
                     
-                    // Dispatch async
+                    // Dispatch
                     var task = Task.Run(() =>
                     {
                         try
@@ -169,17 +196,18 @@ namespace ModuleHost.Core
                         }
                         finally
                         {
-                            // Always release view (even on exception)
-                            entry.Provider.ReleaseView(view);
+                            // View release handled by HarvestEntry
                         }
                     });
                     
-                    tasks.Add(task);
-                    
-                    // ⚠️ CRITICAL: Reset accumulator after execution
-                    _accumulatedTime[entry.Module] = 0f;
-                    
+                    entry.CurrentTask = task;
                     entry.FramesSinceLastRun = 0;
+                    
+                    // Check Policy: If FrameSynced, we must wait
+                    if (entry.Module.Policy.Mode == ModuleMode.FrameSynced)
+                    {
+                        tasksToWait.Add(task);
+                    }
                 }
                 else
                 {
@@ -187,32 +215,19 @@ namespace ModuleHost.Core
                 }
             }
             
-            // Wait for all modules to complete
-            // (In production, might use timeout or separate phase)
-            // Note: This blocks the main thread, which is fine for this phase as per design.
-            // BATCH-05 might move this to a separate phase if needed.
-            Task.WaitAll(tasks.ToArray());
-            
-            // NEW: Playback commands from modules
-            foreach (var entry in _modules)
+            // ═══════════ SYNC WAIT (Fast Modules) ═══════════
+            if (tasksToWait.Count > 0)
             {
-                // Get command buffer from provider's view
-                if (entry.LastView is EntityRepository repo)
+                Task.WaitAll(tasksToWait.ToArray());
+                
+                // Harvest immediately
+                foreach (var entry in _modules)
                 {
-                    // Iterate ALL values tracked by ThreadLocal (from all threads that used this repo)
-                    foreach (var cmdBuffer in repo._perThreadCommandBuffer.Values)
+                    if (entry.CurrentTask != null && entry.Module.Policy.Mode == ModuleMode.FrameSynced)
                     {
-                        if (cmdBuffer.HasCommands)
-                        {
-                            cmdBuffer.Playback(_liveWorld);
-                            // Clear is called inside Playback automatically? 
-                            // EntityCommandBuffer.Playback says: "Clear buffer after playback -> Clear();"
-                            // So we don't need to call Clear() explicitly if Playback does it.
-                            // Let's check EntityCommandBuffer.Playback implementation.
-                        }
+                        HarvestEntry(entry);
                     }
                 }
-                entry.LastView = null;
             }
             
             // ═══════════ PHASE: PostSimulation ═══════════
@@ -224,19 +239,45 @@ namespace ModuleHost.Core
             _currentFrame++;
         }
 
+        private void HarvestEntry(ModuleEntry entry)
+        {
+            // 1. Playback commands
+            if (entry.LeasedView is EntityRepository repo)
+            {
+                if (repo._perThreadCommandBuffer != null)
+                {
+                    foreach (var cmdBuffer in repo._perThreadCommandBuffer.Values)
+                    {
+                        if (cmdBuffer.HasCommands)
+                            cmdBuffer.Playback(_liveWorld);
+                    }
+                }
+            }
+            
+            // 2. Release view
+            if (entry.LeasedView != null)
+            {
+                entry.Provider.ReleaseView(entry.LeasedView);
+                entry.LeasedView = null;
+            }
+            
+            // 3. Handle faults
+            if (entry.CurrentTask?.IsFaulted == true)
+            {
+                Console.Error.WriteLine($"Module {entry.Module.Name} failed: {entry.CurrentTask.Exception}");
+            }
+            
+            // 4. Cleanup
+            entry.CurrentTask = null;
+            entry.LastRunTick = _currentFrame;
+        }
+
         public Dictionary<string, int> GetExecutionStats()
         {
             var stats = new Dictionary<string, int>();
             foreach (var entry in _modules)
             {
                 stats[entry.Module.Name] = entry.ExecutionCount;
-                // Reset count after reading (as per 1 Hz display logic usually, or keep it?)
-                // Instructions say "Module Executions (last second)".
-                // Usually this means we should clear it or return rate.
-                // But the Renderer says: "Module Executions (last second)". 
-                // If I reset here, the renderer gets 0 if it calls it multiple times? 
-                // Renderer calls it every 60 frames.
-                // So I should probably reset it here.
                 entry.ExecutionCount = 0;
             }
             return stats;
@@ -296,13 +337,19 @@ namespace ModuleHost.Core
             _modules.Clear();
         }
         
-        private class ModuleEntry
+        internal class ModuleEntry
         {
             public IModule Module { get; set; } = null!;
             public ISnapshotProvider Provider { get; set; } = null!;
             public int FramesSinceLastRun { get; set; }
             public ISimulationView? LastView { get; set; }
             public int ExecutionCount; // Field for Interlocked
+            
+            // Async State (NEW - for World C)
+            public Task? CurrentTask { get; set; }
+            public ISimulationView? LeasedView { get; set; }
+            public float AccumulatedDeltaTime { get; set; }
+            public uint LastRunTick { get; set; }  // For reactive scheduling prep
         }
     }
 }

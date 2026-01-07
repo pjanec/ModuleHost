@@ -31,8 +31,8 @@ namespace ModuleHost.Core.Tests
             
             using var provider = new OnDemandProvider(live, acc, mask);
             
-            // Should have 2 snapshots
-            Assert.Equal(2, GetPoolCount(provider));
+            // Should have 5 snapshots (default)
+            Assert.Equal(5, GetPoolCount(provider));
         }
 
         [Fact]
@@ -55,7 +55,8 @@ namespace ModuleHost.Core.Tests
             using var live = new EntityRepository();
             var acc = new EventAccumulator();
             var mask = new BitMask256();
-            using var provider = new OnDemandProvider(live, acc, mask);
+            // Create with small pool to test depletion
+            using var provider = new OnDemandProvider(live, acc, mask, null, 2);
             
             // Drain pool (2 items)
             provider.AcquireView();

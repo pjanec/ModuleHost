@@ -28,10 +28,16 @@ namespace ModuleHost.Core.Tests
                 kernel.Update(0.016f);
             }
             
+            // Wait for async execution
+            System.Threading.SpinWait.SpinUntil(() => testModule.WasExecuted, 2000);
+            
             // Assert: Module should have received delta time of ~0.1s, not 0.016s
             Assert.True(testModule.WasExecuted, "Module should have executed");
             Assert.InRange(testModule.LastDeltaTime, 0.095f, 0.105f);
             
+            // Reset for next check
+            testModule.Reset();
+
             // Verify it resets after execution
             kernel.Update(0.016f); // Frame 7 - no execution
             kernel.Update(0.016f); // Frame 8 - no execution
@@ -41,6 +47,9 @@ namespace ModuleHost.Core.Tests
             {
                 kernel.Update(0.016f);
             }
+            
+            // Wait again
+            System.Threading.SpinWait.SpinUntil(() => testModule.WasExecuted, 2000);
             
             // Should have executed twice now
             Assert.InRange(testModule.LastDeltaTime, 0.095f, 0.105f);
@@ -83,6 +92,8 @@ namespace ModuleHost.Core.Tests
             WasExecuted = true;
             LastDeltaTime = deltaTime;
         }
+        
+        public void Reset() => WasExecuted = false;
         
         public void RegisterSystems(ISystemRegistry registry) { }
     }

@@ -92,10 +92,10 @@ namespace ModuleHost.Core.Tests.Integration
                 // Phase 2: ModuleHost (modules run, queue commands)
                 moduleHost.Update(deltaTime);
                 
-                // Commands automatically played back in ModuleHost.Update
+                // Allow async modules to run
+                System.Threading.Thread.Sleep(10);
                 
-                // Advance live world
-                liveWorld.Tick();
+                // Commands automatically played back in ModuleHost.Update
             }
             
             // Verify: Modules ran correct number of times
@@ -160,6 +160,9 @@ namespace ModuleHost.Core.Tests.Integration
             moduleHost.RegisterModule(checkModule, podProvider);
             moduleHost.Initialize(); // REQUIRED
             moduleHost.Update(0.1f);
+            
+            // Wait for async execution
+            System.Threading.Thread.Sleep(50);
             
             // With SoD mask, we should see Position but NOT Velocity?
             // OnDemandProvider SyncFrom logic uses mask.
