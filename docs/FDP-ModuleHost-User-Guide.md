@@ -2105,6 +2105,864 @@ public class NetworkSmoothingSystem : IModuleSystem
 
 ---
 
+## Network Ownership & Distributed Simulation
+
+### The Ownership Model
+
+In distributed simulations, **not every node simulates every entity**. Each entity has an **owner** - the node responsible for its authoritative state.
+
+**NetworkOwnership Component:**
+
+```csharp
+public struct NetworkOwnership
+{
+    public int OwnerId;           // Which node owns this entity
+    public bool IsLocallyOwned;   // Do WE own it?
+}
+```
+
+**Example:**
+```
+Node 1 owns: Tank-001, Infantry-Squad-A
+Node 2 owns: Tank-002, Aircraft-001
+Node 3 owns: Artillery-Battery-B
+
+Each node simulates ALL entities, but only PUBLISHES owned entities to network.
+```
+
+### Ownership Rules for Components
+
+**Rule:** Only the owner **writes** component state to the network. All nodes **read** from network.
+
+#### Ingress (Network → FDP)
+
+```csharp
+public void PollIngress(IDataReader reader, IEntityCommandBuffer cmd, ISimulationView view)
+{
+    foreach (var sample in reader.TakeSamples())
+    {
+        var desc = (EntityStateDescriptor)sample;
+        var entity = MapToEntity(desc.EntityId);
+        
+        // Check ownership
+        if (view.HasComponent<NetworkOwnership>(entity))
+        {
+            var ownership = view.GetComponentRO<NetworkOwnership>(entity);
+            
+            // We own this entity - IGNORE incoming network updates
+            if (ownership.IsLocallyOwned)
+                return; // Our local simulation is authoritative
+        }
+        
+        // We don't own it - UPDATE from network data
+        cmd.SetComponent(entity, new Position { Value = desc.Location });
+        cmd.SetComponent(entity, new Velocity { Value = desc.Velocity });
+    }
+}
+```
+
+**Why?**
+- Without this check: Owner's local state gets overwritten by stale network data
+- Result: "Rubber-banding" - entity jumps between local and network positions
+
+#### Egress (FDP → Network)
+
+```csharp
+public void ScanAndPublish(ISimulationView view, IDataWriter writer)
+{
+    var query = view.Query()
+        .With<Position>()
+        .With<Velocity>()
+        .With<NetworkOwnership>()
+        .Build();
+    
+    foreach (var entity in query)
+    {
+        var ownership = view.GetComponentRO<NetworkOwnership>(entity);
+        
+        // Only publish if WE own this entity
+        if (!ownership.IsLocallyOwned)
+            continue; // Another node is publishing this
+        
+        // Build descriptor and publish
+        var descriptor = new EntityStateDescriptor
+        {
+            EntityId = MapToNetworkId(entity),
+            OwnerId = ownership.OwnerId,
+            Location = view.GetComponentRO<Position>(entity).Value,
+            Velocity = view.GetComponentRO<Velocity>(entity).Value
+        };
+        
+        writer.Write(descriptor);
+    }
+}
+```
+
+**Why?**
+- Without this check: All 3 nodes publish same entity → Network flooded with duplicate data
+- With check: Only owner publishes → Clean, efficient network traffic
+
+### Ownership Rules for Events
+
+**Events have THREE ownership models** depending on event type:
+
+#### 1. Entity-Sourced Events (Ownership Required)
+
+Events that originate from a specific entity's action.
+
+**Examples:**
+- `WeaponFireEvent` - Tank fires weapon
+- `DamageEvent` - Entity takes damage
+- `DetonationEvent` - Munition explodes
+
+**Rule:** Only the node owning the **source entity** publishes to network.
+
+**Code:**
+```csharp
+public void PublishEvents(ISimulationView view, IDataWriter writer)
+{
+    var events = view.GetEvents<WeaponFireEvent>();
+    
+    foreach (var evt in events)
+    {
+        // Check ownership of FIRING entity
+        var ownership = view.GetComponentRO<NetworkOwnership>(evt.FiringEntity);
+        
+        // Only publish if WE own the firing entity
+        if (!ownership.IsLocallyOwned)
+            continue; // Another node will publish this
+        
+        // Translate and publish
+        var pdu = new FirePDU
+        {
+            FiringEntityId = MapToNetworkId(evt.FiringEntity),
+            TargetEntityId = MapToNetworkId(evt.TargetEntity),
+            WeaponType = evt.WeaponType,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        };
+        
+        writer.Write(pdu);
+    }
+}
+```
+
+**Why this matters:**
+
+```
+Scenario: Tank-001 (owned by Node 1) fires at Tank-002
+
+Without ownership check:
+  - Node 1 sees fire event → publishes to network
+  - Node 2 sees fire event → publishes to network
+  - Node 3 sees fire event → publishes to network
+  Result: Network sees 3 fire events for single shot!
+
+With ownership check:
+  - Node 1 owns Tank-001 → publishes FirePDU
+  - Node 2 doesn't own Tank-001 → skips
+  - Node 3 doesn't own Tank-001 → skips
+  Result: Network sees 1 fire event (correct!)
+```
+
+#### 2. Global/Broadcast Events (No Ownership)
+
+Events not tied to any  specific entity.
+
+**Examples:**
+- `MissionObjectiveComplete` - Scenario event
+- `TimeOfDayChanged` - Environment change
+- `PhaseTransition` - Simulation state change
+
+**Rule:** Published by designated **authority node** (e.g., mission server, environment manager).
+
+**Code:**
+```csharp
+public void PublishEvents(ISimulationView view, IDataWriter writer)
+{
+    var events = view.GetEvents<MissionObjectiveComplete>();
+    
+    foreach (var evt in events)
+    {
+        // NO ownership check - but typically only mission server generates these
+        // (Enforced by game logic, not network layer)
+        
+        var pdu = new MissionObjectivePDU
+        {
+            ObjectiveId = evt.ObjectiveId,
+            Status = evt.Status,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        };
+        
+        writer.Write(pdu);
+    }
+}
+```
+
+**Design note:** Usually only ONE node (by role) generates these events. If multiple nodes could generate them, use a coordinator pattern or leader election.
+
+#### 3. Multi-Entity Events (Complex Ownership)
+
+Events involving multiple entities where both might be owned by different nodes.
+
+**Examples:**
+- `CollisionEvent` - Two entities collide
+- `FormationJoinedEvent` - Entity joins another's formation
+
+**Rule:** Owner of **primary/aggressor entity** publishes. Use deterministic tie-breaking.
+
+**Code:**
+```csharp
+public void PublishEvents(ISimulationView view, IDataWriter writer)
+{
+    var events = view.GetEvents<CollisionEvent>();
+    
+    foreach (var evt in events)
+    {
+        var ownershipA = view.GetComponentRO<NetworkOwnership>(evt.EntityA);
+        var ownershipB = view.GetComponentRO<NetworkOwnership>(evt.EntityB);
+        
+        // Deterministic rule: Publish if we own EntityA, 
+        // OR if we own EntityB but EntityA doesn't exist locally
+        bool shouldPublish = ownershipA.IsLocallyOwned || 
+                            (ownershipB.IsLocallyOwned && !ownershipA.IsLocallyOwned);
+        
+        if (!shouldPublish)
+            continue;
+        
+        var pdu = new CollisionPDU
+        {
+            EntityAId = MapToNetworkId(evt.EntityA),
+            EntityBId = MapToNetworkId(evt.EntityB),
+            ImpactPoint = evt.ImpactPoint,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        };
+        
+        writer.Write(pdu);
+    }
+}
+```
+
+**Why deterministic rule?**
+Both nodes might detect collision locally (physics running on both). Without a rule, both nodes publish → duplicate event. The rule ensures exactly ONE node publishes.
+
+### Common Ownership Patterns
+
+#### Pattern 1: Static Ownership (Pre-assigned)
+
+```csharp
+// At entity creation
+var entity = view.CreateEntity();
+cmd.SetComponent(entity, new NetworkOwnership
+{
+    OwnerId = GetLocalNodeId(),
+    IsLocallyOwned = true
+});
+
+// This entity is ALWAYS owned by creating node
+```
+
+**Use for:** Player avatar, locally spawned objects
+
+#### Pattern 2: Dynamic Ownership (Transferable)
+
+```csharp
+// Transfer ownership when player enters vehicle
+public void OnPlayerEnterVehicle(Entity vehicle, Entity player)
+{
+    var playerOwnership = view.GetComponentRO<NetworkOwnership>(player);
+    
+    // Vehicle adopts player's ownership
+    cmd.SetComponent(vehicle, new NetworkOwnership
+    {
+        OwnerId = playerOwnership.OwnerId,
+        IsLocallyOwned = playerOwnership.IsLocallyOwned
+    });
+    
+    // Publish ownership transfer to network
+    cmd.PublishEvent(new OwnershipTransferEvent
+    {
+        Entity = vehicle,
+        NewOwnerId = playerOwnership.OwnerId
+    });
+}
+```
+
+**Use for:** Vehicles, lootable items, transferable equipment
+
+#### Pattern 3: Proximity-Based Ownership
+
+```csharp
+// Transfer ownership to nearest player
+public void OnProximityCheck(Entity item)
+{
+    var nearestPlayer = FindNearestPlayer(item);
+    
+    if (nearestPlayer != Entity.Null)
+    {
+        var playerOwnership = view.GetComponentRO<NetworkOwnership>(nearestPlayer);
+        
+        // Item becomes owned by nearest player's node
+        cmd.SetComponent(item, new NetworkOwnership
+        {
+            OwnerId = playerOwnership.OwnerId,
+            IsLocallyOwned = playerOwnership.IsLocallyOwned
+        });
+    }
+}
+```
+
+**Use for:** Area-of-interest management, load balancing
+
+### Debugging Ownership Issues
+
+**Common Problems:**
+
+1. **Rubber-banding (Entity jerks around):**
+   - **Cause:** Owner is updating locally, but also reading network updates for owned entity
+   - **Fix:** Add ownership check in ingress - skip owned entities
+
+2. **Duplicate Network Events:**
+   - **Cause:** All nodes publishing same entity-sourced event
+   - **Fix:** Add ownership check in egress - only owner publishes
+
+3. **Entity State Divergence:**
+   - **Cause:** Ownership transfer not synchronized
+   - **Fix:** Use `OwnershipTransferEvent` to coordinate transfer
+
+4. **Missing Events:**
+   - **Cause:** Wrong node thinks it owns entity
+   - **Fix:** Verify ownership component matches network ID mapping
+
+**Diagnostic Code:**
+
+```csharp
+[UpdateInPhase(SystemPhase.PostSimulation)]
+public class OwnershipDebugSystem : ComponentSystem
+{
+    protected override void OnUpdate()
+    {
+        var query = World.Query()
+            .With<NetworkOwnership>()
+            .With<Position>()
+            .Build();
+        
+        foreach (var entity in query)
+        {
+            var ownership = World.GetComponent<NetworkOwnership>(entity);
+            var pos = World.GetComponent<Position>(entity);
+            
+            if (ownership.IsLocallyOwned)
+            {
+                Console.WriteLine($"[OWNED] Entity {entity.Id} at {pos.Value}");
+            }
+            else
+            {
+                Console.WriteLine($"[REMOTE] Entity {entity.Id} (Owner: {ownership.OwnerId}) at {pos.Value}");
+            }
+        }
+    }
+}
+```
+
+---
+
+## Time Control & Synchronization
+
+### The GlobalTime Descriptor
+
+In distributed simulations, each node needs a consistent view of **simulation time**. This is separate from **wall clock time** (real world).
+
+**GlobalTime Singleton:**
+
+```csharp
+public struct GlobalTime
+{
+    public double TotalTime;        // Elapsed simulation time (seconds)
+    public float DeltaTime;         // Time since last frame (seconds)
+    public float TimeScale;         // Speed multiplier (0.0 = paused, 1.0 = realtime, 2.0 = 2x speed)
+    public bool IsPaused;           // Convenience flag (TimeScale == 0.0)
+    public long FrameNumber;        // Current frame index
+}
+```
+
+**Usage in Systems:**
+
+```csharp
+public class PhysicsSystem : ComponentSystem
+{
+    protected override void OnUpdate()
+    {
+        // Get global time from world
+        var time = World.GetSingleton<GlobalTime>();
+        
+        // Use simulation time, not wall clock
+        float dt = time.DeltaTime;
+        
+        // Physics updates with scaled time
+        foreach (var entity in _query)
+        {
+            var vel = World.GetComponent<Velocity>(entity);
+            var pos = World.GetComponent<Position>(entity);
+            
+            // This respects TimeScale automatically
+            pos.Value += vel.Value * dt;
+            
+            World.SetComponent(entity, pos);
+        }
+    }
+}
+```
+
+### Two Modes of Time Synchronization
+
+Distributed simulations face a fundamental challenge: **How do multiple nodes stay synchronized?**
+
+FDP/ModuleHost supports two modes:
+
+#### Mode 1: Continuous (Real-Time / Scaled)
+
+**Best-effort synchronization**. Time flows continuously. Nodes chase the master clock.
+
+**When to use:**
+- Training simulations (flight simulators, tactical trainers)
+- Game servers (MMOs, multiplayer games)
+- Live demonstrations
+- Most simulation scenarios (90% of use-cases)
+
+**Characteristics:**
+- ✅ Low latency (~20ms variance)
+- ✅ Smooth playback
+- ✅ Can pause/resume/speed up
+- ⚠️ Not perfectly deterministic (acceptable for most use-cases)
+
+#### Mode 2: Deterministic (Lockstep / Stepped)
+
+**Strict synchronization**. Frame N starts only when Frame N-1 is done everywhere.
+
+**When to use:**
+- Scientific simulations requiring exact reproducibility
+- Regulatory compliance (aerospace, medical)
+- Debugging distributed bugs (replay from logs)
+- Network testing (controlled timing)
+
+**Characteristics:**
+- ✅ Perfectly deterministic
+- ✅ Repeatable from logs
+- ⚠️ High latency (limited by slowest node)
+- ⚠️ No smooth playback if network lags
+
+### The Clock Model
+
+**Separation of Concerns:**
+- **Wall Clock** - Real world time (UTC ticks)
+- **Simulation Clock** - Virtual world time (can be paused, scaled, stepped)
+
+**Master/Slave Architecture:**
+- **Master Clock** - One node (Orchestrator) owns authoritative time
+- **Slave Clocks** - All other nodes follow Master using Phase-Locked Loop (PLL)
+
+**The Simulation Time Equation:**
+
+$$T_{sim} = T_{base} + (T_{wall} - T_{start}) \times Scale$$
+
+Where:
+- $T_{sim}$ - Current simulation time
+- $T_{base}$ - Simulation time when last speed change happened
+- $T_{wall}$ - Current wall clock time (UTC)
+- $T_{start}$ - Wall clock time when last speed change happened
+- $Scale$ - Speed coefficient
+
+**Example:**
+
+```
+Initial State:
+  T_base = 0.0
+  T_start = 12:00:00 UTC
+  Scale = 1.0 (realtime)
+
+At 12:00:10 UTC:
+  T_sim = 0.0 + (12:00:10 - 12:00:00) × 1.0 = 10.0 seconds
+
+Speed up to 2x at T_sim = 10.0:
+  T_base = 10.0
+  T_start = 12:00:10 UTC
+  Scale = 2.0
+
+At 12:00:20 UTC:
+  T_sim = 10.0 + (12:00:20 - 12:00:10) × 2.0 = 30.0 seconds
+  (10 wall seconds = 20 sim seconds due to 2x speed)
+
+Pause at T_sim = 30.0:
+  T_base = 30.0
+  T_start = 12:00:20 UTC
+  Scale = 0.0
+
+At 12:00:40 UTC:
+  T_sim = 30.0 + (12:00:40 - 12:00:20) × 0.0 = 30.0 seconds
+  (Frozen at 30.0 despite 20 wall seconds passing)
+```
+
+### Continuous Mode Implementation
+
+**Network Protocol:**
+
+**Topic:** `Sys.TimePulse` (1Hz heartbeat + on-change)
+
+**Payload:**
+```csharp
+public class TimePulseDescriptor
+{
+    public long MasterWallTime;      // Master's UTC ticks
+    public double SimTimeSnapshot;   // Master's current T_sim
+    public float TimeScale;          // Master's current Scale
+    public bool IsPaused;            // Master's pause state
+}
+```
+
+**Master Node Behavior:**
+
+```csharp
+public class MasterTimeController : ITimeController
+{
+    private Stopwatch _wallClock = Stopwatch.StartNew();
+    private double _simTimeBase = 0.0;
+    private long _scaleChangeWallTicks = 0;
+    private float _timeScale = 1.0f;
+    
+    public void Update(out float dt, out double totalTime)
+    {
+        // Calculate wall delta
+        long currentWallTicks = _wallClock.ElapsedTicks;
+        double wallDelta = (currentWallTicks - _lastWallTicks) / (double)Stopwatch.Frequency;
+        _lastWallTicks = currentWallTicks;
+        
+        // Calculate sim delta (respecting scale)
+        dt = (float)(wallDelta * _timeScale);
+        totalTime = _simTimeBase + (currentWallTicks - _scaleChangeWallTicks) / (double)Stopwatch.Frequency * _timeScale;
+        
+        // Publish to network (1Hz or on-change)
+        if (ShouldPublishPulse())
+        {
+            _networkWriter.Write(new TimePulseDescriptor
+            {
+                MasterWallTime = DateTimeOffset.UtcNow.Ticks,
+                SimTimeSnapshot = totalTime,
+                TimeScale = _timeScale,
+                IsPaused = _timeScale == 0.0f
+            });
+        }
+    }
+    
+    public void SetTimeScale(float scale)
+    {
+        // Save current sim time as new base
+        _simTimeBase = CalculateCurrentSimTime();
+        _scaleChangeWallTicks = _wallClock.ElapsedTicks;
+        _timeScale = scale;
+        
+        // Immediately publish to slaves
+        PublishTimePulse();
+    }
+}
+```
+
+**Slave Node Behavior (with PLL):**
+
+```csharp
+public class SlaveTimeController : ITimeController
+{
+    private Stopwatch _wallClock = Stopwatch.StartNew();
+    private double _simTimeBase = 0.0;
+    private long _scaleChangeWallTicks = 0;
+    private float _timeScale = 1.0f;
+    
+    // PLL state
+    private double _timeError = 0.0;
+    private const float _correctionFactor = 0.01f; // 1% adjustment per frame
+    
+    public void OnTimePulseReceived(TimePulseDescriptor pulse)
+    {
+        // Calculate what our sim time SHOULD be based on master's snapshot
+        long currentWallTicks = DateTimeOffset.UtcNow.Ticks;
+        double wallDeltaSincePulse = (currentWallTicks - pulse.MasterWallTime) / (double)TimeSpan.TicksPerSecond;
+        double masterSimTime = pulse.SimTimeSnapshot + wallDeltaSincePulse * pulse.TimeScale;
+        
+        // Calculate our current sim time
+        double localSimTime = CalculateCurrentSimTime();
+        
+        // Calculate error
+        _timeError = masterSimTime - localSimTime;
+        
+        // Update scale
+        _timeScale = pulse.TimeScale;
+    }
+    
+    public void Update(out float dt, out double totalTime)
+    {
+        // Calculate wall delta
+        long currentWallTicks = _wallClock.ElapsedTicks;
+        double wallDelta = (currentWallTicks - _lastWallTicks) / (double)Stopwatch.Frequency;
+        _lastWallTicks = currentWallTicks;
+        
+        // PLL Correction: Gently adjust dt to converge with master
+        // If we're behind (error > 0), run slightly faster
+        // If we're ahead (error < 0), run slightly slower
+        float correction = (float)(_timeError * _correctionFactor);
+        float adjustedScale = _timeScale + correction;
+        
+        // Calculate dt with adjusted scale
+        dt = (float)(wallDelta * adjustedScale);
+        totalTime = CalculateCurrentSimTime() + dt;
+        
+        // Reduce error by what we just corrected
+        _timeError -= correction * wallDelta;
+    }
+}
+```
+
+**Why PLL (Phase-Locked Loop)?**
+
+Without PLL:
+```
+Master says: T_sim = 10.0
+Slave has: T_sim = 9.8
+
+Bad approach: Snap to 10.0
+Result: Time jumps! Entities teleport! Rubber-banding!
+
+Good approach (PLL): Gradually increase dt by 1% for next few frames
+Frame 0: dt = 0.01616 (instead of 0.016)
+Frame 1: dt = 0.01616
+Frame 2: dt = 0.01616
+...
+After 100 frames: Converged to 10.0 smoothly
+```
+
+### Deterministic Mode Implementation
+
+**Network Protocol:**
+
+**Topic:** `Sys.FrameOrder` (Master → All)
+**Topic:** `Sys.FrameAck` (All → Master)
+
+**Frame Order Descriptor:**
+```csharp
+public class FrameOrderDescriptor
+{
+    public long FrameID;        // Frame number to execute
+    public float FixedDelta;    // Fixed dt for this frame (e.g., 0.016s)
+}
+```
+
+**Frame Ack Descriptor:**
+```csharp
+public class FrameAckDescriptor
+{
+    public long FrameID;        // Frame just completed
+    public int NodeID;          // Who completed it
+}
+```
+
+**Lockstep Cycle:**
+
+```
+1. Master waits for all ACKs for Frame N-1
+
+2. Master publishes FrameOrder { FrameID: N, FixedDelta: 0.016 }
+
+3. Slave receives FrameOrder:
+   - Runs simulation with dt = 0.016
+   - Executes all systems
+   - **BARRIER: Pauses at end of frame**
+   - Publishes FrameAck { FrameID: N, NodeID: Me }
+
+4. Repeat
+```
+
+**Master Implementation:**
+
+```csharp
+public class SteppedTimeController : ITimeController
+{
+    private long _currentFrame = 0;
+    private float _fixedDelta = 0.016f;
+    private HashSet<int> _pendingAcks = new();
+    private bool _waitingForAcks = false;
+    
+    public void Update(out float dt, out double totalTime)
+    {
+        if (_waitingForAcks)
+        {
+            // Check if all ACKs received
+            if (_pendingAcks.Count == 0)
+            {
+                // All nodes finished Frame N-1, advance to Frame N
+                _currentFrame++;
+                _waitingForAcks = false;
+                
+                // Publish order for next frame
+                _networkWriter.Write(new FrameOrderDescriptor
+                {
+                    FrameID = _currentFrame,
+                    FixedDelta = _fixedDelta
+                });
+                
+                // Reset pending ACKs
+                _pendingAcks = new HashSet<int>(_allNodeIds);
+            }
+            else
+            {
+                // Still waiting - don't advance simulation
+                dt = 0.0f;
+                totalTime = _currentFrame * _fixedDelta;
+                return;
+            }
+        }
+        
+        // Execute this frame
+        dt = _fixedDelta;
+        totalTime = _currentFrame * _fixedDelta;
+        
+        // Mark waiting for ACKs
+        _waitingForAcks = true;
+    }
+    
+    public void OnFrameAckReceived(FrameAckDescriptor ack)
+    {
+        if (ack.FrameID == _currentFrame)
+        {
+            _pendingAcks.Remove(ack.NodeID);
+        }
+    }
+}
+```
+
+**Slave Implementation:**
+
+```csharp
+public class SteppedSlaveController : ITimeController
+{
+    private long _currentFrame = 0;
+    private float _fixedDelta = 0.016f;
+    private bool _hasFrameOrder = false;
+    
+    public void OnFrameOrderReceived(FrameOrderDescriptor order)
+    {
+        _currentFrame = order.FrameID;
+        _fixedDelta = order.FixedDelta;
+        _hasFrameOrder = true;
+    }
+    
+    public void Update(out float dt, out double totalTime)
+    {
+        if (!_hasFrameOrder)
+        {
+            // Waiting for master - don't advance
+            dt = 0.0f;
+            totalTime = _currentFrame * _fixedDelta;
+            return;
+        }
+        
+        // Execute frame
+        dt = _fixedDelta;
+        totalTime = _currentFrame * _fixedDelta;
+        
+        // After simulation completes (end of Update), send ACK
+        _hasFrameOrder = false;
+    }
+    
+    public void SendFrameAck()
+    {
+        _networkWriter.Write(new FrameAckDescriptor
+        {
+            FrameID = _currentFrame,
+            NodeID = _localNodeId
+        });
+    }
+}
+```
+
+### Time Control Usage Examples
+
+#### Example 1: Pause Simulation
+
+```csharp
+public class SimulationController
+{
+    private MasterTimeController _timeController;
+    
+    public void OnPauseButtonClicked()
+    {
+        _timeController.SetTimeScale(0.0f);
+        // All slave nodes will receive TimePulse and pause smoothly
+    }
+    
+    public void OnResumeButtonClicked()
+    {
+        _timeController.SetTimeScale(1.0f);
+        // Resume at normal speed
+    }
+}
+```
+
+#### Example 2: Variable Speed Playback
+
+```csharp
+public class TrainingControls
+{
+    public void SetPlaybackSpeed(float speed)
+    {
+        // 0.5x = Slow motion for analysis
+        // 1.0x = Realtime
+        // 2.0x = Fast forward
+        _timeController.SetTimeScale(speed);
+    }
+}
+```
+
+#### Example 3: Deterministic Replay from Log
+
+```csharp
+public class ReplayController
+{
+    private SteppedTimeController _timeController;
+    private List<FrameOrderDescriptor> _recordedFrames;
+    
+    public void ReplayFromLog()
+    {
+        // Switch to deterministic mode
+        _timeController.SetMode(TimeMode.Stepped);
+        
+        // Replay each frame exactly as it was recorded
+        foreach (var frameOrder in _recordedFrames)
+        {
+            _timeController.ExecuteFrame(frameOrder);
+            // Exact dt, exact frame number - deterministic!
+        }
+    }
+}
+```
+
+### Choosing the Right Mode
+
+**Use Continuous Mode when:**
+- ✅ You need smooth, responsive playback
+- ✅ Network latency varies
+- ✅ Nodes have different performance characteristics
+- ✅ Users need pause/speed controls
+- ✅ "Good enough" synchronization is acceptable (~20ms variance)
+
+**Use Deterministic Mode when:**
+- ✅ You need perfect reproducibility
+- ✅ Debugging distributed bugs
+- ✅ Regulatory compliance (audit trails)
+- ✅ Scientific validation
+- ⚠️ Can tolerate latency (slowest node bottleneck)
+
+**Recommendation:** Start with **Continuous Mode**. It handles 90% of use-cases and provides a better user experience. Add Deterministic Mode later only if strict reproducibility is required.
+
+---
+
 ## Anti-Patterns to Avoid
 
 ### ❌ DON'T: System-to-System References
