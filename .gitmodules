@@ -2,3 +2,6 @@
 	path = FDP
 	url = https://github.com/pjanec/FastDataPlane.git
 	branch = main
+[submodule "FastBTree"]
+	path = FastBTree
+	url = https://github.com/pjanec/FastBTree.git
