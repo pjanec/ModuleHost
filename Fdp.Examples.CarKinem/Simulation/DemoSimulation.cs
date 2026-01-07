@@ -242,31 +242,30 @@ namespace Fdp.Examples.CarKinem.Simulation
             _lastRecordedVersion = _repository.GlobalVersion;
         }
         
-        public void StepForward()
+        public void StepForward(int frames = 1)
         {
             IsPaused = true;
             if (IsReplaying && PlaybackController != null)
             {
                 // Seek to next frame
-                // CurrentFrame tracks the NEXT frame index.
-                // So seeking to CurrentFrame advances one step.
-                PlaybackController.SeekToFrame(_repository, PlaybackController.CurrentFrame);
+                // CurrentFrame tracks the current frame index.
+                // So seeking to CurrentFrame + frames advances steps.
+                int target = Math.Min(PlaybackController.CurrentFrame + frames, PlaybackController.TotalFrames - 1);
+                PlaybackController.SeekToFrame(_repository, target);
             }
             else
             {
-                StepFrames = 1;
+                StepFrames = frames;
             }
         }
 
-        public void StepBackward()
+        public void StepBackward(int frames = 1)
         {
             if (!IsReplaying || PlaybackController == null) return;
             
             IsPaused = true;
             // Seek to previous frame (clamped to 0)
-            // CurrentFrame is index of *next* frame.
-            // If visual is 10, Current is 11. We want 9. So 11 - 2 = 9.
-            int target = Math.Max(0, PlaybackController.CurrentFrame - 2);
+            int target = Math.Max(0, PlaybackController.CurrentFrame - frames);
             PlaybackController.SeekToFrame(_repository, target);
         }
 

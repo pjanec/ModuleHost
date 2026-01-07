@@ -17,9 +17,8 @@ namespace CarKinem.Systems
         
         protected override void OnCreate()
         {
-            // Hardcoded: 200x200 meter world, 5m cells = 40x40 grid
-            // Used a sufficiently large entity capacity to avoid reallocation for now
-            _grid = SpatialHashGrid.Create(40, 40, 5.0f, 100000, Allocator.Persistent);
+            // 150x150 cells * 5m = 750x750m world coverage
+            _grid = SpatialHashGrid.Create(150, 150, 5.0f, 100000, Allocator.Persistent);
         }
         
         protected override void OnUpdate()

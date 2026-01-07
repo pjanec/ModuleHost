@@ -9,9 +9,51 @@ namespace Fdp.Examples.CarKinem.Input
         private Vector2 _dragStartPos;
         private bool _isDragging;
         private bool _possibleClick;
+        private KeyInputManager _keyManager;
+        private DemoSimulation _boundSimulation;
+
+        public InputManager()
+        {
+            _keyManager = new KeyInputManager();
+            // We can't register keys here because we don't have the simulation instance yet.
+            // We'll delay registration until HandleInput, or make it check if registered.
+        }
+
+        private void EnsureKeysRegistered(DemoSimulation simulation)
+        {
+            if (_boundSimulation == simulation) return;
+            
+            _boundSimulation = simulation;
+            _keyManager.Clear();
+            
+            _keyManager.RegisterKey(KeyboardKey.Right, (count) => 
+            {
+                int step = 1;
+                if (Raylib.IsKeyDown(KeyboardKey.LeftShift) || Raylib.IsKeyDown(KeyboardKey.RightShift)) step = 10;
+                if (Raylib.IsKeyDown(KeyboardKey.LeftControl) || Raylib.IsKeyDown(KeyboardKey.RightControl)) step = 100;
+                
+                for(int i=0; i<count; i++) simulation.StepForward(step);
+            });
+            
+            _keyManager.RegisterKey(KeyboardKey.Left, (count) => 
+            {
+                int step = 1;
+                if (Raylib.IsKeyDown(KeyboardKey.LeftShift) || Raylib.IsKeyDown(KeyboardKey.RightShift)) step = 10;
+                if (Raylib.IsKeyDown(KeyboardKey.LeftControl) || Raylib.IsKeyDown(KeyboardKey.RightControl)) step = 100;
+
+                for(int i=0; i<count; i++) simulation.StepBackward(step);
+            });
+
+            _keyManager.RegisterKey(KeyboardKey.Space, () => 
+            {
+                simulation.IsPaused = !simulation.IsPaused;
+            });
+        }
 
         public void HandleInput(SelectionManager selection, PathEditingMode pathEditor, ref Camera2D camera, DemoSimulation simulation, global::Fdp.Examples.CarKinem.UI.UIState uiState)
         {
+            EnsureKeysRegistered(simulation);
+
             float dt = Raylib.GetFrameTime();
             var io = ImGuiNET.ImGui.GetIO();
             bool mouseCaptured = io.WantCaptureMouse;
@@ -118,15 +160,9 @@ namespace Fdp.Examples.CarKinem.Input
             // Keyboard Shortcuts
             if (!kbdCaptured)
             {
-                if (Raylib.IsKeyPressed(KeyboardKey.Right))
-                {
-                    simulation.StepForward();
-                }
-
-                if (Raylib.IsKeyPressed(KeyboardKey.Left))
-                {
-                    simulation.StepBackward();
-                }
+                // Update and process auto-repeat keys
+                _keyManager.Update(dt);
+                _keyManager.ProcessActions();
             }
         }
     }
