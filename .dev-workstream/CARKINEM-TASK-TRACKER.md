@@ -19,9 +19,9 @@
 | BATCH-CK-06 | Spatial Hash | 🟢 COMPLETE | 2026-01-07 | 2026-01-07 | Collision detection |
 | BATCH-CK-07 | Kinematics | 🟢 COMPLETE | 2026-01-07 | 2026-01-07 | Main physics system |
 | BATCH-CK-08 | Formation | 🟢 COMPLETE | 2026-01-07 | 2026-01-07 | Formation support |
-| **BATCH-CK-FIX-01** | **Corrections** | **🔴 URGENT** | - | - | **Architectural fixes** |
-| BATCH-CK-09 | Commands | 🟠 BLOCKED | - | - | Event processing |
-| BATCH-CK-10 | Integration | 🟠 BLOCKED | - | - | Demo app |
+| BATCH-CK-FIX-01 | Corrections | 🟢 COMPLETE | 2026-01-07 | 2026-01-07 | Architectural fixes |
+| BATCH-CK-09 | Commands | 🔵 READY | - | - | Event processing |
+| BATCH-CK-10 | Integration | 🔵 READY | - | - | Demo app |
 
 **Legend:** 🔵 Ready | 🟡 In Progress | 🟢 Complete | 🔴 Urgent | 🟠 Blocked | ⚪ Planned
 

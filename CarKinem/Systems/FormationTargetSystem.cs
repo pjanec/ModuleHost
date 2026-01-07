@@ -10,6 +10,7 @@ namespace CarKinem.Systems
     /// Calculates formation slot targets for members.
     /// Runs before CarKinematicsSystem.
     /// </summary>
+    [UpdateInGroup(typeof(SimulationSystemGroup))]
     [UpdateBefore(typeof(CarKinematicsSystem))]
     public class FormationTargetSystem : ComponentSystem
     {
@@ -28,42 +29,17 @@ namespace CarKinem.Systems
             foreach (var formationEntity in formationQuery)
             {
                 var roster = World.GetComponent<FormationRoster>(formationEntity);
-                UpdateFormation(roster);
+                UpdateFormation(ref roster);
             }
         }
         
-        private unsafe void UpdateFormation(FormationRoster roster)
+        private void UpdateFormation(ref FormationRoster roster)
         {
             if (roster.Count == 0)
                 return;
             
             // Get leader entity
-            int leaderEntityId = roster.MemberEntityIds[0];
-            var leaderEntity = new Entity(leaderEntityId, 0); // Generation 0 is technically invalid, usually we need real Entity. 
-                                                            // But FormationRoster stores "Entity IDs".
-                                                            // If we don't store generation in roster, we risk stale refs.
-                                                            // Assuming IDs are valid indices for now.
-                                                            // However, accessing World requires Generation check usually.
-                                                            // Since we don't have generation in FormationRoster (only int[]), 
-                                                            // this is a potential design flaw in BATCH-CK-01 or just a simplification.
-                                                            // But Entity constructor requires generation.
-                                                            // We can hack it by fetching generation from repository if index is valid?
-                                                            // World.GetEntityIndex().GetHeader(index).Generation...
-                                                            // But we don't have access to EntityIndex easily here without casting World.
-                                                            // Let's assume the IDs in Roster are just Indices and we hope the entity is alive 
-                                                            // and we get the current generation from World if possible...
-                                                            // World.IsAlive takes Entity.
-                                                            
-                                                            // Using special Entity constructor or forcing logic? 
-                                                            // World.GetHeader(index) is exposed in my recent view of EntityRepository.
-                                                            // Let's use that to reconstruct valid Entity handle.
-            
-            if (leaderEntityId < 0) return;
-            
-            ref var leaderHeader = ref World.GetHeader(leaderEntityId);
-            if (!leaderHeader.IsActive) return;
-            
-            leaderEntity = new Entity(leaderEntityId, leaderHeader.Generation);
+            Entity leaderEntity = roster.GetMember(0);
             
             if (!World.IsAlive(leaderEntity))
                 return;
@@ -74,15 +50,12 @@ namespace CarKinem.Systems
             // Update each member's target
             for (int i = 1; i < roster.Count; i++) // Start at 1 (skip leader)
             {
-                int memberEntityId = roster.MemberEntityIds[i];
-                if (memberEntityId < 0) continue;
+                Entity memberEntity = roster.GetMember(i);
                 
-                ref var memberHeader = ref World.GetHeader(memberEntityId);
-                if (!memberHeader.IsActive) continue;
+                if (!World.IsAlive(memberEntity))
+                    continue;
                 
-                var memberEntity = new Entity(memberEntityId, memberHeader.Generation);
-                
-                int slotIndex = roster.SlotIndices[i];
+                int slotIndex = roster.GetSlotIndex(i);
                 
                 // Calculate slot position
                 Vector2 slotPos = template.GetSlotPosition(slotIndex, 
@@ -94,17 +67,13 @@ namespace CarKinem.Systems
                     World.AddComponent(memberEntity, new FormationTarget());
                 }
                 
-                // We need read/write access. 
-                // Since I can't call GetComponentRef easily based on recent issues (or can I?),
-                // I'll Get, Modify, Set.
                 var target = World.GetComponent<FormationTarget>(memberEntity);
                 target.TargetPosition = slotPos;
                 target.TargetHeading = leaderState.Forward;
                 target.TargetSpeed = leaderState.Speed;
-                World.AddComponent(memberEntity, target); // AddComponent overwrites
+                World.SetComponent(memberEntity, target);
                 
                 // Update member state based on distance to slot
-                // We need to modify FormationMember component.
                 if (World.HasComponent<FormationMember>(memberEntity))
                 {
                     var member = World.GetComponent<FormationMember>(memberEntity);
@@ -129,7 +98,7 @@ namespace CarKinem.Systems
                         member.State = FormationMemberState.Broken;
                     }
                     
-                    World.AddComponent(memberEntity, member);
+                    World.SetComponent(memberEntity, member);
                 }
             }
         }

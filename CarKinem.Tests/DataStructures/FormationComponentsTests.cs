@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 using CarKinem.Formation;
+using Fdp.Kernel;
 using Xunit;
 
 namespace CarKinem.Tests.DataStructures
@@ -13,17 +14,24 @@ namespace CarKinem.Tests.DataStructures
             var roster = new FormationRoster();
             roster.Count = 2;
             
-            // Test fixed array access
-            // Direct access to fixed size buffers is supported in unsafe context
-            roster.MemberEntityIds[0] = 100;
-            roster.MemberEntityIds[1] = 101;
-            Assert.Equal(100, roster.MemberEntityIds[0]);
-            Assert.Equal(101, roster.MemberEntityIds[1]);
+            // Test fixed array access via extensions or direct unsafe
+            roster.SetMember(0, new Entity(100, 1));
+            roster.SetMember(1, new Entity(101, 2));
             
-            roster.SlotIndices[0] = 10;
-            roster.SlotIndices[1] = 20;
-            Assert.Equal(10, roster.SlotIndices[0]);
-            Assert.Equal(20, roster.SlotIndices[1]);
+            var e0 = roster.GetMember(0);
+            var e1 = roster.GetMember(1);
+            
+            Assert.Equal(100, e0.Index);
+            Assert.Equal(1, e0.Generation);
+            Assert.Equal(101, e1.Index);
+            Assert.Equal(2, e1.Generation);
+            
+            // Slot indices (still ushort)
+            roster.SetSlotIndex(0, 10);
+            roster.SetSlotIndex(1, 20);
+            
+            Assert.Equal(10, roster.GetSlotIndex(0));
+            Assert.Equal(20, roster.GetSlotIndex(1));
         }
 
         [Fact]
@@ -34,7 +42,7 @@ namespace CarKinem.Tests.DataStructures
             // MemberEntityIds is 16 ints (64 bytes)
             // SlotIndices is 16 ushorts (32 bytes)
             
-            var roster = new FormationRoster();
+            // Roster checking logic...
             // We can check size of the whole struct and deduce, or inspect fields via reflection/unsafe.
             
             // Let's rely on manual size verification

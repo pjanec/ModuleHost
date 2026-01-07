@@ -15,7 +15,8 @@ namespace CarKinem.Formation
         public FormationParams Params;    // Formation parameters
         
         // Fixed-capacity arrays (zero GC, cache-friendly)
-        public fixed int MemberEntityIds[16];   // Entity IDs of members
+        // Fixed-capacity arrays (zero GC, cache-friendly)
+        public fixed long MemberEntities[16];   // Full Entity (8 bytes: ID + Generation)
         public fixed ushort SlotIndices[16];    // Slot index for each member
     }
 }

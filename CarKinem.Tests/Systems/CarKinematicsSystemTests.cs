@@ -20,6 +20,7 @@ namespace CarKinem.Tests.Systems
             repo.RegisterComponent<VehicleState>();
             repo.RegisterComponent<VehicleParams>();
             repo.RegisterComponent<NavState>();
+            repo.RegisterComponent<SpatialGridData>();
             
             // Register GlobalTime for DeltaTime
             repo.SetSingletonUnmanaged(new GlobalTime { DeltaTime = 0.016f, TimeScale = 1.0f });
@@ -30,37 +31,6 @@ namespace CarKinem.Tests.Systems
             var spatialSystem = new SpatialHashSystem();
             var kinematicsSystem = new CarKinematicsSystem(roadNetwork, trajectoryPool);
             
-            // Register systems with a registry if possible, or manually setup
-            // Assuming EntityRepository has a SystemRegistry or we can simulate
-            // Since we can't easily rely on missing methods, for this test we manually inject?
-            // But CarKinematicsSystem.OnCreate calls World.GetSystem<T>().
-            
-            // WORKAROUND: If GetSystem is not on EntityRepository, we might need to handle it.
-            // For now, let's assume the extension exists or we can mock via SystemGroup.
-            // But SystemGroup is a ComponentSystem.
-            
-            // If the instructions are correct, this *should* work if I implement it right.
-            // But I'll modify the test to manually set World and use public Create/Run.
-            
-            // Since we can't register systems easily without the scheduler infrastructure (which might be in another project),
-            // and OnCreate uses World.GetSystem, we are in a bind if that method doesn't exist.
-            
-            // Let's try to mock the registry if possible?
-            // No, we can't mock World easily as it's a sealed class.
-            
-            // Let's create the systems manually and wire them up.
-            // But OnCreate calls GetSystem. 
-            // So we MUST have GetSystem working on World.
-            
-            // However, CarKinematicsSystem is what I implemented.
-            // I can change implementation of CarKinematicsSystem to allow dependency injection of SpatialHashSystem!
-            // That would be cleaner.
-            
-            // Let's modify CarKinematicsSystem constructor to optionally take SpatialHashSystem.
-            // And fallback to World.GetSystem if null.
-            // That way I can inject it in tests.
-            kinematicsSystem.SpatialSystemOverride = spatialSystem;
-
             spatialSystem.Create(repo);
             kinematicsSystem.Create(repo);
             
@@ -97,6 +67,9 @@ namespace CarKinem.Tests.Systems
             spatialSystem.Run();
             kinematicsSystem.Run();
             
+            // Verify singleton exists
+            Assert.True(repo.HasSingleton<SpatialGridData>());
+            
             Vector2 finalPos = repo.GetComponent<VehicleState>(entity).Position;
             
             // Vehicle should have moved (speed = 10 m/s, dt = 0.016 -> 0.16m move)
@@ -117,14 +90,14 @@ namespace CarKinem.Tests.Systems
             repo.RegisterComponent<VehicleState>();
             repo.RegisterComponent<VehicleParams>();
             repo.RegisterComponent<NavState>();
+            repo.RegisterComponent<SpatialGridData>();
             repo.SetSingletonUnmanaged(new GlobalTime { DeltaTime = 0.1f, TimeScale = 1.0f }); // Large DT
 
             var roadNetwork = new RoadNetworkBuilder().Build(5f, 40, 40);
             var trajectoryPool = new TrajectoryPoolManager();
             var spatialSystem = new SpatialHashSystem();
             var kinematicsSystem = new CarKinematicsSystem(roadNetwork, trajectoryPool);
-            kinematicsSystem.SpatialSystemOverride = spatialSystem;
-
+            
             spatialSystem.Create(repo);
             kinematicsSystem.Create(repo);
 
@@ -176,6 +149,7 @@ namespace CarKinem.Tests.Systems
             repo.RegisterComponent<VehicleState>();
             repo.RegisterComponent<VehicleParams>();
             repo.RegisterComponent<NavState>();
+            repo.RegisterComponent<SpatialGridData>();
             repo.SetSingletonUnmanaged(new GlobalTime { DeltaTime = 0.1f, TimeScale = 1.0f });
 
             var roadNetwork = new RoadNetworkBuilder().Build(5f, 40, 40);
@@ -185,8 +159,7 @@ namespace CarKinem.Tests.Systems
 
             var spatialSystem = new SpatialHashSystem();
             var kinematicsSystem = new CarKinematicsSystem(roadNetwork, trajectoryPool);
-            kinematicsSystem.SpatialSystemOverride = spatialSystem;
-
+            
             spatialSystem.Create(repo);
             kinematicsSystem.Create(repo);
 

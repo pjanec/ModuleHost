@@ -38,9 +38,9 @@ namespace CarKinem.Tests.Formation
             var roster = new FormationRoster();
             
             // Fixed buffer assignment needs no 'new' allocation, they are inline.
-            roster.MemberEntityIds[0] = leader.Index; // Leader at index 0
-            roster.MemberEntityIds[1] = follower.Index;
-            roster.SlotIndices[1] = 0; // Use first slot
+            roster.SetMember(0, leader); // Leader at index 0
+            roster.SetMember(1, follower);
+            roster.SetSlotIndex(1, 0); // Use first slot
             roster.Count = 2;
             roster.Type = FormationType.Column;
             roster.Params = new FormationParams { ArrivalThreshold = 1f, BreakDistance = 20f, MaxCatchUpFactor = 1.2f };

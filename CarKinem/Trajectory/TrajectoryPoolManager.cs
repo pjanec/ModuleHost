@@ -24,7 +24,7 @@ namespace CarKinem.Trajectory
         /// <param name="speeds">Desired speeds at each waypoint (optional, defaults to 10 m/s)</param>
         /// <param name="looped">True if trajectory loops back to start</param>
         /// <returns>Unique trajectory ID</returns>
-        public int RegisterTrajectory(Vector2[] positions, float[] speeds = null, bool looped = false)
+        public int RegisterTrajectory(Vector2[] positions, float[]? speeds = null, bool looped = false)
         {
             if (positions == null || positions.Length < 2)
                 throw new ArgumentException("Trajectory must have at least 2 waypoints", nameof(positions));

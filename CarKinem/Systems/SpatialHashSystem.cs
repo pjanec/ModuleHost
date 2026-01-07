@@ -8,15 +8,12 @@ namespace CarKinem.Systems
 {
     /// <summary>
     /// Builds spatial hash grid from vehicle positions each frame.
-    /// Runs early (Phase.EarlyUpdate) before kinematics.
+    /// Publishes grid as singleton component.
     /// </summary>
-    // [SystemAttributes(Phase = Phase.EarlyUpdate, UpdateFrequency = UpdateFrequency.EveryFrame)]
-    [UpdateBefore(typeof(CarKinematicsSystem))]
+    [UpdateInGroup(typeof(SimulationSystemGroup))]
     public class SpatialHashSystem : ComponentSystem
     {
         private SpatialHashGrid _grid;
-        
-        public SpatialHashGrid Grid => _grid;
         
         protected override void OnCreate()
         {
@@ -37,6 +34,9 @@ namespace CarKinem.Systems
                 var state = World.GetComponent<VehicleState>(entity);
                 _grid.Add(entity.Index, state.Position);
             }
+            
+            // Publish as singleton (Data-Oriented pattern)
+            World.SetSingleton(new SpatialGridData { Grid = _grid });
         }
         
         protected override void OnDestroy()
