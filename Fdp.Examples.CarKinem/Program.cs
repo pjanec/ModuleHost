@@ -77,10 +77,7 @@ namespace Fdp.Examples.CarKinem
                 inputManager.HandleInput(selection, pathEditor, ref camera, simulation, mainUI.UIState);
                 
                 // Simulation
-                if (!mainUI.IsPaused)
-                {
-                     simulation.Tick(dt * mainUI.TimeScale);
-                }
+                simulation.Tick(dt * mainUI.TimeScale);
                 
                 // Render
                 Raylib.BeginDrawing();

@@ -51,8 +51,8 @@ namespace CarKinem.Systems
                 .With<NavState>()
                 .Build();
             
-            // Parallel update using FDP's zero-GC ForEachParallel
-            query.ForEachParallel((entity) =>
+            // Serial update to ensure proper versioning (Parallel interferes with Recorder stamps)
+            query.ForEach((entity) =>
             {
                 UpdateVehicle(entity, dt, spatialGrid);
             });

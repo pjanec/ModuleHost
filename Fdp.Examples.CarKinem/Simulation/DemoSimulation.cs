@@ -122,14 +122,15 @@ namespace Fdp.Examples.CarKinem.Simulation
             _repository.RegisterEvent<CmdSetSpeed>();
         }
         
+        public int StepFrames { get; set; }
+
         public void Tick(float deltaTime)
         {
             // Replay Mode
             if (IsReplaying && PlaybackController != null)
             {
-                if (!IsPaused || SingleStep)
+                if (!IsPaused)
                 {
-                    SingleStep = false;
                     if (!PlaybackController.StepForward(_repository))
                     {
                         IsPaused = true; // End of recording
@@ -145,8 +146,9 @@ namespace Fdp.Examples.CarKinem.Simulation
             }
 
             // Live / Recording Mode
-            if (IsPaused && !SingleStep) return;
-            SingleStep = false;
+            if (IsPaused && StepFrames <= 0) return;
+            if (StepFrames > 0) StepFrames--;
+            // SingleStep = false; // logic replaced by decrement above
             
             // Required for Versioning to work with AsyncRecorder
             _repository.Tick();
@@ -234,10 +236,38 @@ namespace Fdp.Examples.CarKinem.Simulation
             // Ideally we restart simulation. For now, just flag it.
             // Re-enable recording
             // Re-enable recording
-            Recorder = new AsyncRecorder("demo_recording_new.fdp");
+            Recorder = new AsyncRecorder("demo_recording.fdp");
             IsRecording = true;
             _totalRecordedFrames = 0;
             _lastRecordedVersion = _repository.GlobalVersion;
+        }
+        
+        public void StepForward()
+        {
+            IsPaused = true;
+            if (IsReplaying && PlaybackController != null)
+            {
+                // Seek to next frame
+                // CurrentFrame tracks the NEXT frame index.
+                // So seeking to CurrentFrame advances one step.
+                PlaybackController.SeekToFrame(_repository, PlaybackController.CurrentFrame);
+            }
+            else
+            {
+                StepFrames = 1;
+            }
+        }
+
+        public void StepBackward()
+        {
+            if (!IsReplaying || PlaybackController == null) return;
+            
+            IsPaused = true;
+            // Seek to previous frame (clamped to 0)
+            // CurrentFrame is index of *next* frame.
+            // If visual is 10, Current is 11. We want 9. So 11 - 2 = 9.
+            int target = Math.Max(0, PlaybackController.CurrentFrame - 2);
+            PlaybackController.SeekToFrame(_repository, target);
         }
 
         private void UpdateRoamers()

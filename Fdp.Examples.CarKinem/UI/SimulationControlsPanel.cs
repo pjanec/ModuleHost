@@ -26,8 +26,7 @@ namespace Fdp.Examples.CarKinem.UI
             // Step
             if (ImGui.Button("Step"))
             {
-                sim.IsPaused = true;
-                sim.SingleStep = true;
+                sim.StepForward();
             }
             
             ImGui.SameLine();
