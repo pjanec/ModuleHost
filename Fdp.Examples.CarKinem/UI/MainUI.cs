@@ -12,6 +12,7 @@ namespace Fdp.Examples.CarKinem.UI
         private EntityInspector _entityInspector = new();
         private EventInspector _eventInspector = new();
         private PerformancePanel _perfPanel = new();
+        private SystemPerformanceWindow _sysPerfWindow = new();
         
         public UIState UIState { get; } = new();
         public bool IsPaused => _simControls.IsPaused;
@@ -40,6 +41,7 @@ namespace Fdp.Examples.CarKinem.UI
                 if (ImGui.CollapsingHeader("Performance", ImGuiTreeNodeFlags.DefaultOpen))
                 {
                     _perfPanel.Render(simulation);
+                    ImGui.Checkbox("Show System Profiler", ref _sysPerfWindow.IsOpen);
                 }
                 
                 ImGui.End();
@@ -54,6 +56,9 @@ namespace Fdp.Examples.CarKinem.UI
             _eventInspector.SetEventBus(simulation.Repository.Bus);
             _eventInspector.Update();
             _eventInspector.DrawImGui();
+            
+            // System Performance Profiler - separate window
+            _sysPerfWindow.Render(simulation.Systems);
         }
     }
 }

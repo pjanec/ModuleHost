@@ -78,7 +78,17 @@ namespace Fdp.Examples.CarKinem.Simulation
             _formationTargetSystem.Create(_repository);
             _commandSystem.Create(_repository);
             _kinematicsSystem.Create(_repository);
+            
+            _systems.AddRange(new ComponentSystem[] { 
+                _spatialSystem, 
+                _formationTargetSystem, 
+                _commandSystem, 
+                _kinematicsSystem 
+            });
         }
+        
+        private List<ComponentSystem> _systems = new List<ComponentSystem>();
+        public IReadOnlyList<ComponentSystem> Systems => _systems;
         
         private void RegisterComponents()
         {
