@@ -181,17 +181,3 @@ private Vector2 ApplyCollisionAvoidance(...)
 - Much better crowd behavior
 
 ---
-
-## Implementation Note
-
-Since BATCH-CK-FIX-01 is complete and BATCH-CK-09 is ready, you could:
-
-1. **Add as enhancement to CK-09** - Include velocity fix in command system batch
-2. **Create micro-batch CK-FIX-02** - Focused RVO enhancement
-3. **Defer to CK-10** - Polish during demo integration
-
-**I recommend: Include in BATCH-CK-10 as a polish item** since the system is functional but suboptimal.
-
----
-
-**Status:** Not a bug, but a **significant enhancement** worth implementing before production use.

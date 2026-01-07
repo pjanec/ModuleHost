@@ -168,7 +168,23 @@ namespace CarKinem.Systems
             for (int i = 0; i < count; i++)
             {
                 var (entityId, pos) = neighbors[i];
-                neighborData[i] = (pos, Vector2.Zero);
+                
+                // Fetch neighbor velocity (SAFE - read-only access)
+                // Use GetEntity to reconstruct handle checking active generation
+                var neighborEntity = World.GetEntity(entityId); 
+                
+                // Check if entity is valid and has VehicleState
+                if (!neighborEntity.IsNull && World.HasComponent<VehicleState>(neighborEntity))
+                {
+                    var neighborState = World.GetComponent<VehicleState>(neighborEntity);
+                    Vector2 neighborVel = neighborState.Forward * neighborState.Speed;
+                    neighborData[i] = (pos, neighborVel);
+                }
+                else
+                {
+                    // Fallback to stationary if entity is invalid
+                    neighborData[i] = (pos, Vector2.Zero);
+                }
             }
             
             return RVOAvoidance.ApplyAvoidance(

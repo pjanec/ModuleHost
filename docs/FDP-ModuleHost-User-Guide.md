@@ -264,6 +264,9 @@ public class MySystem : ComponentSystem
     {
         // Initialize resources
         _myBuffer = new NativeArray<float>(1000, Allocator.Persistent);
+
+        // initialize queries; Caching queries in OnCreate is a major perf win vs building them in OnUpdate
+        _query = World.Query().With<Pos>().Build();
     }
     
     // Called every frame (or based on schedule)
@@ -1106,6 +1109,60 @@ public struct Transform
 ```
 
 ---
+
+### 1. The "Ghost Entity" Pattern (Network Interpolation)
+*   **Context:** In networking or smoothing, you often have a "Target State" (from network) and a "Present State" (visual).
+*   **Best Practice:** Do not snap position directly. Use a separate component for the target.
+*   **Example:**
+    ```csharp
+    public struct NetworkTarget { public Vector3 Pos; }
+    public struct Position { public Vector3 Value; } // Rendered
+    
+    // System:
+    pos.Value = Vector3.Lerp(pos.Value, target.Pos, dt * 10);
+    ```
+
+### 2. Input Handling Pattern (Polled vs Event)
+*   **Context:** How to get keyboard/mouse input into the ECS?
+*   **Best Practice:**
+    *   *Option A (Singleton):* `World.SetSingleton(new InputState { IsJumpPressed = true })`. Good for continuous state.
+    *   *Option B (Events):* `cmd.PublishEvent(new JumpCommand())`. Good for one-shot actions.
+    *   **Anti-Pattern:** Reading `Input.GetKeyDown` inside a deep simulation system (breaks determinism/replay).
+
+### 3. Tag Components (Flags)
+*   **Context:** Boolean flags on components waste memory and bandwidth if they are sparse.
+*   **Best Practice:** Use "Tag Components" (empty structs) to mark state.
+*   **Example:**
+    ```csharp
+    public struct IsBurning : IComponentData {} // Size: 1 byte (or 0 logic size)
+    
+    // Query:
+    var burningQuery = World.Query().With<Position>().With<IsBurning>().Build();
+    ```
+    *   *Why:* Faster iteration (smaller archetype), cleaner logic (`HasComponent<IsBurning>`).
+
+### 4. Prefabs / Blueprints (TKB)
+*   **Context:** Creating complex entities with 10 components manually is error-prone.
+*   **Best Practice:** Use the TKB (Transient Knowledge Base) or a Factory pattern.
+*   **Example:**
+    ```csharp
+    // Instead of manual AddComponent calls:
+    TkbDatabase.Spawn("Tank_T72", World, position);
+    ```
+
+### 5. "Read-Write-Write" Dependency Hazards
+*   **Context:** Parallel execution rules.
+*   **Best Practice:** If you read from Component A and write to Component B, ensure no other system reads B in parallel.
+*   **Advice:** "Read-Only is free. Write requires exclusivity." (Though FDP handles this via `ForEachParallel` entity isolation, the architectural mindset helps).
+
+### 6. Debugging Tips
+*   **Context:** ECS debugging is hard because data is scattered.
+*   **Best Practice:**
+    *   Use the **Flight Recorder** to catch glitches in act.
+    *   Name your Entities (debug build only) or use `ManagedComponent<DebugName>` if needed.
+    *   Use `[SystemAttributes]` to force serial execution (`MaxDegreeOfParallelism = 1`) when debugging race conditions.
+
+
 
 ## Quick Reference
 
