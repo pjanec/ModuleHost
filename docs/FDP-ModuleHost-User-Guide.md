@@ -216,6 +216,52 @@ repository.DestroyEntity(entity);
 - Use `SetComponent` when you know the component exists (update scenario)
 - Use `AddComponent` when you may be creating it for the first time
 
+### Repository Ticking & Versioning
+
+**Crucial:** The `EntityRepository` tracks changes using a `GlobalVersion` counter. This version is **NOT** updated automatically. You MUST manually tick the repository once per simulation frame.
+
+```csharp
+// At the start of your Simulation Loop
+public void Tick(float deltaTime)
+{
+    // 1. Tick the Repository (Increments GlobalVersion)
+    _repository.Tick(); 
+    
+    // ... run systems ...
+}
+```
+
+**Why is this needed?**
+Mechanisms like the **Flight Recorder** (Delta Compression) and **Reactive Systems** rely on change detection. They query for "all components changed since Version X".
+- If `Tick()` is never called, `GlobalVersion` remains static (e.g., at 1).
+- Even if component data changes, the Version Stamp on the chunk remains 1.
+- The Recorder queries "Changes > 1". It finds nothing.
+- **Result:** Empty delta frames, simulation state "freezes" or jumps during replay.
+
+**When to call it:**
+- **Synchronous Simulation:** Call `_repository.Tick()` at the very start of your `Update()` or `Tick()` method.
+- **ModuleHost:** If using `ModuleHostKernel`, ensure the kernel loop drives the repository tick.
+
+**Example of Recording Failure (Without Tick):**
+```csharp
+// ❌ WRONG: Missing Tick()
+void OnUpdate() {
+    // Modify entities... (Stamped with Version 1)
+    Recorder.CaptureFrame(..., prevTick: 1); // Query > 1. Returns 0 changes.
+    // Result: Replay shows entities not moving!
+}
+```
+
+**Example of Success:**
+```csharp
+// ✅ CORRECT
+void OnUpdate() {
+    _repository.Tick(); // Version becomes 2
+    // Modify entities... (Stamped with Version 2)
+    Recorder.CaptureFrame(..., prevTick: 1); // Query > 1. Finds changes!
+}
+```
+
 ---
 
 ## Systems & Scheduling

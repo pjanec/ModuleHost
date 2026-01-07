@@ -17,7 +17,17 @@ namespace Fdp.Examples.CarKinem.Simulation
     public class DemoSimulation : IDisposable
     {
         private EntityRepository _repository;
-        private AsyncRecorder _recorder;
+        public AsyncRecorder Recorder { get; private set; }
+        public PlaybackController? PlaybackController { get; private set; }
+        
+        public bool IsRecording { get; set; } = true;
+        public bool IsReplaying { get; private set; } = false;
+        public bool IsPaused { get; set; } = false;
+        public bool SingleStep { get; set; } = false;
+        
+        private int _totalRecordedFrames = 0;
+        private ulong _lastRecordedVersion = 0;
+        
         private ModuleHostKernel _kernel;
         private EventAccumulator _eventAccumulator;
         
@@ -41,7 +51,8 @@ namespace Fdp.Examples.CarKinem.Simulation
         public DemoSimulation()
         {
             _repository = new EntityRepository();
-            _recorder = new AsyncRecorder("demo_recording.fdp");
+            Recorder = new AsyncRecorder("demo_recording.fdp");
+            // PlaybackController initialized only on Replay start
             _eventAccumulator = new EventAccumulator();
             
             RegisterComponents();
@@ -85,6 +96,9 @@ namespace Fdp.Examples.CarKinem.Simulation
                 _commandSystem, 
                 _kinematicsSystem 
             });
+            
+            // Initial spawn
+            SpawnFastOne();
         }
         
         private List<ComponentSystem> _systems = new List<ComponentSystem>();
@@ -110,6 +124,33 @@ namespace Fdp.Examples.CarKinem.Simulation
         
         public void Tick(float deltaTime)
         {
+            // Replay Mode
+            if (IsReplaying && PlaybackController != null)
+            {
+                if (!IsPaused || SingleStep)
+                {
+                    SingleStep = false;
+                    if (!PlaybackController.StepForward(_repository))
+                    {
+                        IsPaused = true; // End of recording
+                        Console.WriteLine("Replay Finished");
+                    }
+                    else
+                    {
+                        // In replay, events are injected into the read buffer.
+                        // We must NOT swap buffers.
+                    }
+                }
+                return;
+            }
+
+            // Live / Recording Mode
+            if (IsPaused && !SingleStep) return;
+            SingleStep = false;
+            
+            // Required for Versioning to work with AsyncRecorder
+            _repository.Tick();
+
             // Swap events (Input -> Current)
             _repository.Bus.SwapBuffers();
 
@@ -120,6 +161,7 @@ namespace Fdp.Examples.CarKinem.Simulation
             time.DeltaTime = deltaTime;
             time.TotalTime += deltaTime;
             time.FrameCount++;
+            _repository.SetSingletonUnmanaged(time); // Force version update for Recorder
             
             _spatialSystem.Run();
             _formationTargetSystem.Run();
@@ -128,6 +170,74 @@ namespace Fdp.Examples.CarKinem.Simulation
             
             UpdateWaypointQueues();
             UpdateRoamers();
+            
+            // Record Frame
+            // Record Frame
+            if (IsRecording && Recorder != null)
+            {
+                bool isKeyframe = (_totalRecordedFrames % 60 == 0);
+                
+                if (isKeyframe)
+                {
+                     Recorder.CaptureKeyframe(_repository, false, _repository.Bus);
+                }
+                else
+                {
+                     Recorder.CaptureFrame(_repository, (uint)_lastRecordedVersion, false, _repository.Bus);
+                }
+                
+                _totalRecordedFrames++;
+                _lastRecordedVersion = _repository.GlobalVersion;
+            }
+        }
+        
+        public void StartReplay()
+        {
+            if (IsReplaying) return;
+            
+            // flush recorder
+            Recorder?.Dispose();
+            
+            IsRecording = false;
+            IsReplaying = true;
+            IsPaused = true; // Start paused
+            
+            // Reset repository logic? 
+            // In Showcase, it reuses the repo but clears it? Or PlaybackController handles it?
+            // PlaybackController.StartEncodedPlayback clears the repo usually.
+            
+            // Start Replay
+            try 
+            {
+                PlaybackController = new PlaybackController("demo_recording.fdp");
+                PlaybackController.EventBus = _repository.Bus;
+                PlaybackController.Rewind(_repository);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to start replay: {ex.Message}");
+                IsReplaying = false;
+                IsRecording = true;
+                Recorder = new AsyncRecorder("demo_recording.fdp");
+            }
+        }
+        
+        public void StopReplay()
+        {
+            if (!IsReplaying) return;
+            
+            PlaybackController?.Dispose();
+            PlaybackController = null;
+            
+            IsReplaying = false;
+            // Restore live mode (might be broken state if we don't reload completely)
+            // Ideally we restart simulation. For now, just flag it.
+            // Re-enable recording
+            // Re-enable recording
+            Recorder = new AsyncRecorder("demo_recording_new.fdp");
+            IsRecording = true;
+            _totalRecordedFrames = 0;
+            _lastRecordedVersion = _repository.GlobalVersion;
         }
 
         private void UpdateRoamers()
@@ -269,7 +379,43 @@ namespace Fdp.Examples.CarKinem.Simulation
                  
                  int idB = SpawnVehicle(center + offset, new Vector2(-1, 0), vClass);
                  SetDestination(idB, center - offset);
-            }
+                }
+        }
+
+        public void SpawnFastOne()
+        {
+            if (!RoadNetwork.Nodes.IsCreated || RoadNetwork.Nodes.Length < 2) return;
+            
+            // Pick two random nodes
+            int startIdx = _rng.Next(0, RoadNetwork.Nodes.Length);
+            int endIdx = _rng.Next(0, RoadNetwork.Nodes.Length);
+            while (startIdx == endIdx) endIdx = _rng.Next(0, RoadNetwork.Nodes.Length);
+            
+            var startNode = RoadNetwork.Nodes[startIdx];
+            var endNode = RoadNetwork.Nodes[endIdx];
+            
+            int id = SpawnVehicle(startNode.Position, new Vector2(1,0), global::CarKinem.Core.VehicleClass.PersonalCar);
+            
+            Entity entity = new Entity(id, 1);
+            
+            // Boost speed
+            var vParams = _repository.GetComponent<VehicleParams>(entity);
+            vParams.MaxSpeedFwd = 50.0f; // Very fast
+            vParams.MaxAccel = 10.0f;     // High acceleration
+            vParams.MaxLatAccel = 15.0f;  // Grip
+            // Initialization: Direct modification is safe here (Single thread setup).
+            // For runtime updates, prefer Command Buffers or Events.
+            _repository.SetComponent(entity, vParams);
+            
+            // Set Color (Visual hack? Or does renderer use class color?)
+            // We can't change color easily as it's static in VehiclePresets/Class.
+            // But speed is enough.
+            
+            _repository.Bus.Publish(new CmdNavigateViaRoad {
+                 Entity = entity,
+                 Destination = endNode.Position,
+                 ArrivalRadius = 5.0f
+            });
         }
 
         public void SpawnRoadUsers(int count, global::CarKinem.Core.VehicleClass vClass)
@@ -330,6 +476,8 @@ namespace Fdp.Examples.CarKinem.Simulation
             FormationTemplates.Dispose();
             _kernel.Dispose();
             _repository.Dispose();
+            Recorder?.Dispose();
+            PlaybackController?.Dispose();
         }
     }
 }
