@@ -9,7 +9,7 @@ namespace CarKinem.Formation
     public class FormationTemplate
     {
         public FormationType Type { get; set; }
-        public Vector2[] SlotOffsets { get; set; }
+        public Vector2[]? SlotOffsets { get; set; }
         
         /// <summary>
         /// Calculate slot position in world space.

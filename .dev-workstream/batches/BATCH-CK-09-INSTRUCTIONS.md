@@ -113,6 +113,7 @@ namespace CarKinem.Commands
 ```csharp
 using CarKinem.Commands;
 using CarKinem.Core;
+using CarKinem.Formation;
 using Fdp.Kernel;
 
 namespace CarKinem.Systems
@@ -121,7 +122,8 @@ namespace CarKinem.Systems
     /// Processes vehicle command events.
     /// Runs early to update NavState before physics.
     /// </summary>
-    [SystemAttributes(Phase = Phase.EarlyUpdate, UpdateFrequency = UpdateFrequency.EveryFrame)]
+    [UpdateInGroup(typeof(SimulationSystemGroup))]
+    [UpdateBefore(typeof(CarKinematicsSystem))]
     public class VehicleCommandSystem : ComponentSystem
     {
         protected override void OnUpdate()
@@ -146,7 +148,7 @@ namespace CarKinem.Systems
                 if (!World.IsAlive(entity))
                     continue;
                 
-                ref var nav = ref World.GetComponentRef<NavState>(entity);
+                var nav = World.GetComponent<NavState>(entity);
                 nav.Mode = NavigationMode.None; // Direct navigation (no special mode)
                 nav.FinalDestination = cmd.Destination;
                 nav.ArrivalRadius = cmd.ArrivalRadius;
@@ -168,7 +170,7 @@ namespace CarKinem.Systems
                 if (!World.IsAlive(entity))
                     continue;
                 
-                ref var nav = ref World.GetComponentRef<NavState>(entity);
+                var nav = World.GetComponent<NavState>(entity);
                 nav.Mode = NavigationMode.CustomTrajectory;
                 nav.TrajectoryId = cmd.TrajectoryId;
                 nav.ProgressS = 0f;
@@ -189,7 +191,7 @@ namespace CarKinem.Systems
                 if (!World.IsAlive(entity))
                     continue;
                 
-                ref var nav = ref World.GetComponentRef<NavState>(entity);
+                var nav = World.GetComponent<NavState>(entity);
                 nav.Mode = NavigationMode.RoadGraph;
                 nav.RoadPhase = RoadGraphPhase.Approaching;
                 nav.FinalDestination = cmd.Destination;
@@ -219,16 +221,15 @@ namespace CarKinem.Systems
                     World.AddComponent(entity, new FormationMember());
                 }
                 
-                ref var member = ref World.GetComponentRef<FormationMember>(entity);
+                var member = World.GetComponent<FormationMember>(entity);
                 member.FormationId = cmd.FormationId;
                 member.SlotIndex = cmd.SlotIndex;
                 member.State = FormationMemberState.Rejoining;
+                World.SetComponent(entity, member);
                 
-                ref var nav = ref World.GetComponentRef<NavState>(entity);
+                var nav = World.GetComponent<NavState>(entity);
                 nav.Mode = NavigationMode.Formation;
                 nav.HasArrived = 0;
-                
-                World.SetComponent(entity, member);
                 World.SetComponent(entity, nav);
             }
         }
@@ -244,7 +245,7 @@ namespace CarKinem.Systems
                 if (!World.IsAlive(entity))
                     continue;
                 
-                ref var nav = ref World.GetComponentRef<NavState>(entity);
+                var nav = World.GetComponent<NavState>(entity);
                 nav.Mode = NavigationMode.None;
                 
                 World.SetComponent(entity, nav);
@@ -262,7 +263,7 @@ namespace CarKinem.Systems
                 if (!World.IsAlive(entity))
                     continue;
                 
-                ref var nav = ref World.GetComponentRef<NavState>(entity);
+                var nav = World.GetComponent<NavState>(entity);
                 nav.Mode = NavigationMode.None;
                 nav.TargetSpeed = 0f;
                 
@@ -281,7 +282,7 @@ namespace CarKinem.Systems
                 if (!World.IsAlive(entity))
                     continue;
                 
-                ref var nav = ref World.GetComponentRef<NavState>(entity);
+                var nav = World.GetComponent<NavState>(entity);
                 nav.TargetSpeed = cmd.Speed;
                 
                 World.SetComponent(entity, nav);
