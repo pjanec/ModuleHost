@@ -87,9 +87,22 @@ namespace CarKinem.Systems
                     
                 case NavigationMode.None:
                 default:
-                    targetPos = state.Position;
-                    targetHeading = state.Forward;
-                    targetSpeed = 0f;
+                    // If we have a destination and we are not in a specific mode, drive to point
+                    // Simple "Drive to point" logic
+                    if (nav.HasArrived == 0 && nav.TargetSpeed > 0 && Vector2.DistanceSquared(state.Position, nav.FinalDestination) > nav.ArrivalRadius * nav.ArrivalRadius)
+                    {
+                         Vector2 toDest = nav.FinalDestination - state.Position;
+                         targetHeading = Vector2.Normalize(toDest);
+                         targetPos = state.Position + targetHeading; // Look ahead
+                         targetSpeed = nav.TargetSpeed;
+                    }
+                    else
+                    {
+                        // Idle
+                        targetPos = state.Position;
+                        targetHeading = state.Forward;
+                        targetSpeed = 0f;
+                    }
                     break;
             }
             

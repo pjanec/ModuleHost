@@ -95,6 +95,12 @@ namespace Fdp.Examples.CarKinem.Simulation
         
         public void Tick(float deltaTime)
         {
+            // Swap events (Input -> Current)
+            _repository.Bus.SwapBuffers();
+
+            // Update Kernel first to process/swap events
+            _kernel.Update(deltaTime);
+
             ref var time = ref _repository.GetSingletonUnmanaged<GlobalTime>();
             time.DeltaTime = deltaTime;
             time.TotalTime += deltaTime;
@@ -104,9 +110,6 @@ namespace Fdp.Examples.CarKinem.Simulation
             _formationTargetSystem.Run();
             _commandSystem.Run();
             _kinematicsSystem.Run();
-            
-            // Update Kernel (for Modules if any)
-            _kernel.Update(deltaTime);
         }
         
         public int SpawnVehicle(Vector2 position, Vector2 heading)
@@ -146,7 +149,9 @@ namespace Fdp.Examples.CarKinem.Simulation
 
         public void IssueMoveToPointCommand(Entity entity, Vector2 destination)
         {
-             ((ISimulationView)_repository).GetCommandBuffer().PublishEvent(new CmdNavigateToPoint {
+             // Direct access is safe here because we are on the Main Thread
+             // and we want the event to be picked up in the CURRENT frame's execution logic if possible.
+             _repository.Bus.Publish(new CmdNavigateToPoint {
                 Entity = entity,
                 Destination = destination,
                 Speed = 10.0f,

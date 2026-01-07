@@ -17,6 +17,12 @@ namespace Fdp.Examples.CarKinem
     {
         static void Main(string[] args)
         {
+            if (args.Contains("--headless"))
+            {
+                RunHeadless();
+                return;
+            }
+
             // Initialize Raylib
             // Try to set flags before init to maybe help compatibility or logging
             Raylib.SetConfigFlags(ConfigFlags.ResizableWindow | ConfigFlags.Msaa4xHint);
@@ -53,7 +59,10 @@ namespace Fdp.Examples.CarKinem
                 inputManager.HandleInput(selection, pathEditor, ref camera, simulation);
                 
                 // Simulation
-                simulation.Tick(dt);
+                if (!mainUI.IsPaused)
+                {
+                     simulation.Tick(dt * mainUI.TimeScale);
+                }
                 
                 // Render
                 Raylib.BeginDrawing();
@@ -89,6 +98,35 @@ namespace Fdp.Examples.CarKinem
             simulation.Dispose();
             rlImGui.Shutdown();
             Raylib.CloseWindow();
+        }
+
+        static void RunHeadless()
+        {
+            Console.WriteLine("--- HEADLESS MODE START ---");
+            using var sim = new DemoSimulation();
+            
+            // Spawn
+            var eid = sim.SpawnVehicle(new System.Numerics.Vector2(0, 0), new System.Numerics.Vector2(1, 0));
+            Console.WriteLine($"Spawned Entity {eid} at (0,0)");
+            
+            // Issue Command
+            sim.IssueMoveToPointCommand(eid, new System.Numerics.Vector2(100, 0));
+            Console.WriteLine("Issued Move To (100,0)");
+            
+            // Tick loop
+            for (int i = 0; i < 60; i++)
+            {
+                sim.Tick(0.1f);
+                var nav = sim.GetNavState(eid);
+                
+                if (i % 10 == 0)
+                {
+                    // Access detailed state for debugging
+                    // (Assuming we can't easily get Position without digging into View here, but NavState helps)
+                    Console.WriteLine($"Tick {i}: NavMode={nav.Mode} TargetSpeed={nav.TargetSpeed:F2} Arrived={nav.HasArrived}");
+                }
+            }
+            Console.WriteLine("--- HEADLESS MODE END ---");
         }
     }
 }

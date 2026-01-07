@@ -6,63 +6,94 @@ namespace Fdp.Examples.CarKinem.Input
 {
     public class InputManager
     {
+        private Vector2 _dragStartPos;
+        private bool _isDragging;
+        private bool _possibleClick;
+
         public void HandleInput(SelectionManager selection, PathEditingMode pathEditor, ref Camera2D camera, DemoSimulation simulation)
         {
             float dt = Raylib.GetFrameTime();
             
-            // Camera Pan
-            float panSpeed = 300.0f / camera.Zoom;
-            if (Raylib.IsKeyDown(KeyboardKey.W)) camera.Target.Y -= panSpeed * dt;
-            if (Raylib.IsKeyDown(KeyboardKey.S)) camera.Target.Y += panSpeed * dt;
-            if (Raylib.IsKeyDown(KeyboardKey.A)) camera.Target.X -= panSpeed * dt;
-            if (Raylib.IsKeyDown(KeyboardKey.D)) camera.Target.X += panSpeed * dt;
-            
             // Camera Zoom
-            float zoomSpeed = 0.5f;
             float wheel = Raylib.GetMouseWheelMove();
             if (wheel != 0)
             {
-                camera.Zoom = Math.Clamp(camera.Zoom + wheel * zoomSpeed, 0.1f, 5.0f);
+                Vector2 mouseScreenPos = Raylib.GetMousePosition();
+                Vector2 worldPosBeforeZoom = Raylib.GetScreenToWorld2D(mouseScreenPos, camera);
+
+                camera.Zoom = Math.Clamp(camera.Zoom + wheel * 0.125f * camera.Zoom, 0.1f, 5.0f);
+                
+                Vector2 worldPosAfterZoom = Raylib.GetScreenToWorld2D(mouseScreenPos, camera);
+                camera.Target += (worldPosBeforeZoom - worldPosAfterZoom);
             }
-            
-            // Mouse handling
+
+            if (ImGuiNET.ImGui.GetIO().WantCaptureMouse) return;
+
             Vector2 mouseWorld = Raylib.GetScreenToWorld2D(Raylib.GetMousePosition(), camera);
-            
+
+            // Left Mouse Interaction (Select / Pan / Spawn)
             if (Raylib.IsMouseButtonPressed(MouseButton.Left))
             {
-                // Simple selection logic (iterate all entities?)
-                // For demo, we might need a spatial query, but we can brute force if entity count is small.
-                // Or use SpatialHashSystem if exposed appropriately.
-                // Currently SpatialHashSystem is internal logic.
-                // We'll leave selection for later or implement simple radius check if needed.
-                // Default: spawn vehicle on click if ctrl held
+                _dragStartPos = Raylib.GetMousePosition();
+                _isDragging = false;
+                _possibleClick = true;
+
                 if (Raylib.IsKeyDown(KeyboardKey.LeftControl))
                 {
+                    // Instant Spawn
                     simulation.SpawnVehicle(mouseWorld, new Vector2(1, 0));
-                }
-                else
-                {
-                    // Basic selection logic
-                    bool found = false;
-                    // Note: This brute forces the query which is fine for small N demo
-                    var query = simulation.View.Query().With<global::CarKinem.Core.VehicleState>().Build();
-                    query.ForEach((entity) => {
-                         if (found) return;
-                         var state = simulation.View.GetComponentRO<global::CarKinem.Core.VehicleState>(entity);
-                         if (Vector2.Distance(state.Position, mouseWorld) < 3.0f) // Check radius
-                         {
-                             selection.SelectedEntityId = entity.Index;
-                             found = true;
-                         }
-                    });
-                    
-                    if (!found) selection.SelectedEntityId = null;
+                    _possibleClick = false; // Don't process as selection
                 }
             }
-            
+
+            if (Raylib.IsMouseButtonDown(MouseButton.Left))
+            {
+                var currentPos = Raylib.GetMousePosition();
+                if (Vector2.DistanceSquared(currentPos, _dragStartPos) > 4.0f) // Threshold
+                {
+                    _isDragging = true;
+                    _possibleClick = false; // It's a drag, not a click
+                }
+
+                if (_isDragging && !Raylib.IsKeyDown(KeyboardKey.LeftControl))
+                {
+                    // Pan Logic
+                    var delta = Raylib.GetMouseDelta();
+                    delta = delta * (-1.0f / camera.Zoom);
+                    camera.Target += delta;
+                }
+            }
+
+            if (Raylib.IsMouseButtonReleased(MouseButton.Left))
+            {
+                if (_possibleClick && !Raylib.IsKeyDown(KeyboardKey.LeftControl))
+                {
+                    // It was a click (not a drag)
+                    // Check for entity
+                    int? clickedEntity = null;
+                    float minDistance = float.MaxValue;
+                    
+                    var query = simulation.View.Query().With<global::CarKinem.Core.VehicleState>().Build();
+                    query.ForEach((entity) => {
+                         var state = simulation.View.GetComponentRO<global::CarKinem.Core.VehicleState>(entity);
+                         float dist = Vector2.Distance(state.Position, mouseWorld);
+                         if (dist < 3.0f && dist < minDistance)
+                         {
+                             minDistance = dist;
+                             clickedEntity = entity.Index;
+                         }
+                    });
+
+                    // Update selection
+                    selection.SelectedEntityId = clickedEntity;
+                }
+                
+                _isDragging = false;
+                _possibleClick = false;
+            }
+
             if (Raylib.IsMouseButtonPressed(MouseButton.Right))
             {
-                // Move command if entity selected
                 if (selection.SelectedEntityId.HasValue)
                 {
                     simulation.IssueMoveToPointCommand(selection.SelectedEntityId.Value, mouseWorld);

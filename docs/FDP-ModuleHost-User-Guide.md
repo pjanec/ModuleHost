@@ -633,6 +633,133 @@ Entity Components Updated
 - Events are consumed once (single reader pattern)
 - Events are frame-local (cleared each frame)
 
+
+
+
+### **Event Handling Patterns**
+
+Events are the primary mechanism for communication in FDP. Because the event bus is **double-buffered**, *when* and *how* you send events determines when they are processed.
+
+#### **Understanding the Buffer Cycle**
+
+```
+Frame N:
+  1. Input/Logic writes to PENDING buffer
+  2. SwapBuffers() flips PENDING → CURRENT
+  3. Systems read from CURRENT buffer
+```
+
+This cycle creates three distinct usage patterns.
+
+---
+
+#### **Pattern 1: Synchronous Input (Zero Latency)**
+
+**Scenario:** Player presses a key, and you want the simulation to react in the **same frame**.
+**Method:** Direct `Bus.Publish()` before the Swap.
+
+```csharp
+// 1. Input Phase (Main Loop / InputManager)
+void OnInput()
+{
+    // Write directly to the bus. Goes to PENDING buffer.
+    _world.Bus.Publish(new JumpCommand { Force = 10f });
+}
+
+// 2. Game Loop
+void Update()
+{
+    // Flip buffers. PENDING (JumpCommand) becomes CURRENT.
+    _world.Bus.SwapBuffers(); 
+    
+    // Systems run. They read CURRENT.
+    _jumpSystem.OnUpdate(); // Sees JumpCommand immediately!
+}
+```
+
+*   **Why:** Bypassing command buffers eliminates the 1-frame delay typically associated with deferred operations.
+*   **Safety:** Safe to do from the Main Thread (where Input lives).
+
+---
+
+#### **Pattern 2: System-to-System (Next Frame Latency)**
+
+**Scenario:** Physics system detects a collision and wants to notify the Audio system.
+**Method:** Defer via `CommandBuffer`.
+
+```csharp
+// PhysicsSystem (Frame N)
+void OnUpdate()
+{
+    if (DetectCollision(out var info))
+    {
+        // Don't publish directly during iteration! Use CommandBuffer.
+        // Writes to Thread-Local Buffer.
+        var cmd = World.GetCommandBuffer();
+        cmd.PublishEvent(new CollisionEvent(info));
+    }
+}
+
+// Kernel (End of Frame N)
+// 1. Flushes CommandBuffers -> PENDING Buffer (CollisionEvent)
+
+// Kernel (Start of Frame N+1)
+// 2. SwapBuffers() -> PENDING becomes CURRENT
+
+// AudioSystem (Frame N+1)
+void OnUpdate()
+{
+    // Reads CURRENT. Sees CollisionEvent from Frame N.
+    var events = World.ConsumeEvents<CollisionEvent>();
+}
+```
+
+*   **Why:** Systems run in parallel. Writing to the shared Bus directly would require locking. CommandBuffers handle this thread-safely.
+*   **Latency:** Events appear in the **next frame**. This is standard for ECS.
+
+---
+
+#### **Pattern 3: Background Module (Asynchronous)**
+
+**Scenario:** AI Module (running on a background thread) decides to issue an order.
+**Method:** Defer via `CommandBuffer`.
+
+```csharp
+// AI Module (Background Thread)
+public void Tick(ISimulationView view, float dt)
+{
+    // View is Read-Only. Cannot touch Bus.
+    var cmd = view.GetCommandBuffer();
+    
+    // Queue the event.
+    cmd.PublishEvent(new MoveOrder { Target = ... });
+}
+
+// Kernel (Main Thread Sync Point)
+// 1. Harvests Commands from AI Module
+// 2. Flushes to PENDING Buffer (MoveOrder)
+// 3. Next Swap() makes it visible to Simulation.
+```
+
+*   **Why:** Background threads cannot touch the live `EntityRepository`. They must use the command buffer to marshal data back to the main simulation.
+
+---
+
+### **Best Practice Summary**
+
+| Context | Action | Method | Latency |
+| :--- | :--- | :--- | :--- |
+| **Input / UI** | Player Action | `repo.Bus.Publish()` | **0 Frames** (Same Frame) |
+| **Sync System** | Logic / Physics | `cmd.PublishEvent()` | **1 Frame** (Next Frame) |
+| **Async Module** | AI / Network | `cmd.PublishEvent()` | **1+ Frames** (Next Tick) |
+
+**Critical Rule:** Always ensure `SwapBuffers()` is called exactly **once** per frame, typically at the very start of the tick or immediately after Input processing.
+
+
+
+
+
+
 ---
 
 ## Simulation Views
@@ -1161,6 +1288,11 @@ public struct Transform
     *   Use the **Flight Recorder** to catch glitches in act.
     *   Name your Entities (debug build only) or use `ManagedComponent<DebugName>` if needed.
     *   Use `[SystemAttributes]` to force serial execution (`MaxDegreeOfParallelism = 1`) when debugging race conditions.
+
+
+
+
+
 
 
 

@@ -116,6 +116,19 @@ namespace ModuleHost.Core
             // ═══════════ PHASE: BeforeSync ═══════════
             _globalScheduler.ExecutePhase(SystemPhase.BeforeSync, _liveWorld, deltaTime);
             
+            // FLUSH LIVE WORLD BUFFERS (Architectural Fix)
+            // Ensure commands from Input/BeforeSync phases (main thread) are processed.
+            if (_liveWorld._perThreadCommandBuffer != null)
+            {
+                foreach (var cmdBuffer in _liveWorld._perThreadCommandBuffer.Values)
+                {
+                    if (cmdBuffer.HasCommands)
+                    {
+                        cmdBuffer.Playback(_liveWorld);
+                    }
+                }
+            }
+
             // Capture event history for this frame
             _eventAccumulator.CaptureFrame(_liveWorld.Bus, _currentFrame);
             

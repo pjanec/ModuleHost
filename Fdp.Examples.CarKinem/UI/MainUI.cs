@@ -7,36 +7,45 @@ namespace Fdp.Examples.CarKinem.UI
 {
     public class MainUI
     {
+        private SpawnControlsPanel _spawnControls = new();
+        private SimulationControlsPanel _simControls = new();
+        private InspectorPanel _inspector = new();
+        private PerformancePanel _perfPanel = new();
+        
+        public bool IsPaused => _simControls.IsPaused;
+        public float TimeScale => _simControls.TimeScale;
+
         public void Render(DemoSimulation simulation, SelectionManager selection)
         {
-            ImGui.Begin("Simulation Control");
+            ImGui.SetNextWindowPos(new Vector2(10, 10), ImGuiCond.FirstUseEver);
+            ImGui.SetNextWindowSize(new Vector2(300, 500), ImGuiCond.FirstUseEver);
             
-            ImGui.Text($"FPS: {Raylib_cs.Raylib.GetFPS()}");
-            
-            // Spawn button
-            if (ImGui.Button("Spawn Vehicle"))
+            if (ImGui.Begin("Simulation Control"))
             {
-                 simulation.SpawnVehicle(new Vector2(100, 100), new Vector2(1, 0));
+                ImGui.Text($"FPS: {Raylib_cs.Raylib.GetFPS()}");
+                ImGui.Separator();
+                
+                if (ImGui.CollapsingHeader("Simulation", ImGuiTreeNodeFlags.DefaultOpen))
+                {
+                    _simControls.Render(simulation);
+                }
+                
+                if (ImGui.CollapsingHeader("Spawning", ImGuiTreeNodeFlags.DefaultOpen))
+                {
+                    _spawnControls.Render(simulation);
+                }
+                
+                if (ImGui.CollapsingHeader("Performance", ImGuiTreeNodeFlags.DefaultOpen))
+                {
+                    _perfPanel.Render(simulation);
+                }
+                
+                ImGui.End();
             }
-            
-            ImGui.SameLine();
-            if (ImGui.Button("Reset"))
-            {
-                // Reset logic here if implemented
-            }
-            
-            ImGui.End();
             
             if (selection.SelectedEntityId.HasValue)
             {
-                ImGui.Begin("Inspector");
-                ImGui.Text($"Selected Entity: {selection.SelectedEntityId.Value}");
-                
-                var navParams = simulation.GetNavState(selection.SelectedEntityId.Value);
-                ImGui.Text($"Mode: {navParams.Mode}");
-                ImGui.Text($"Target Speed: {navParams.TargetSpeed:F2}");
-                
-                ImGui.End();
+                _inspector.Render(simulation, selection.SelectedEntityId.Value);
             }
         }
     }
