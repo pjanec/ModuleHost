@@ -1200,6 +1200,510 @@ public class NetworkSmoothingSystem : IModuleSystem
 
 ---
 
+## Chapter 7: Network Ownership & Distributed Simulation
+
+### 7.1 Specification
+
+**Objective:** Define ownership model for components and events in distributed simulations.
+
+**Requirements:**
+- Each entity has one authoritative owner (node)
+- Only owner publishes component state to network
+- Entity-sourced events respect ownership (prevent duplicates)
+- Global events use role-based authority
+- Network traffic minimized through ownership filtering
+
+**Why Needed:**
+- **Prevents Duplicates:** Without ownership, all nodes publish same entity → 3x network traffic
+- **Prevents Rubber-Banding:** Without ingress filtering, owner gets overwritten by stale network data
+- **Event Correctness:** Without ownership, single tank fire → 3 network events (wrong!)
+- **Determinism:** Clear authority prevents state divergence
+
+**Constraints:**
+- Ownership can be transferred (dynamic)
+- Ownership transfer must be synchronized across nodes
+- Network ID mapping required (entity ID may differ per node)
+
+### 7.2 Design
+
+**Core Component:**
+
+```csharp
+public struct NetworkOwnership
+{
+    public int OwnerId;           // Which node owns this entity
+    public bool IsLocallyOwned;   // Do WE own it?
+}
+```
+
+**Ownership Rules for Components:**
+
+**Ingress (Network → FDP):**
+```csharp
+public void PollIngress(IDataReader reader, IEntityCommandBuffer cmd, ISimulationView view)
+{
+    foreach (var sample in reader.TakeSamples())
+    {
+        var desc = (EntityStateDescriptor)sample;
+        var entity = MapToEntity(desc.EntityId);
+        
+        // Skip owned entities (our local simulation is authoritative)
+        if (IsLocallyOwned(entity, view))
+            return;
+        
+        // Update from network
+        cmd.SetComponent(entity, new Position { Value = desc.Location });
+    }
+}
+```
+
+**Egress (FDP → Network):**
+```csharp
+public void ScanAndPublish(ISimulationView view, IDataWriter writer)
+{
+    var query = view.Query().With<Position>().With<NetworkOwnership>().Build();
+    
+    foreach (var entity in query)
+    {
+        var ownership = view.GetComponentRO<NetworkOwnership>(entity);
+        
+        // Only publish if WE own this entity
+        if (!ownership.IsLocallyOwned)
+            continue;
+        
+        writer.Write(BuildDescriptor(entity, view));
+    }
+}
+```
+
+**Ownership Rules for Events (Three Categories):**
+
+**1. Entity-Sourced Events (Ownership Required)**
+
+Events from specific entity actions: `WeaponFireEvent`, `DamageEvent`, `DetonationEvent`
+
+**Rule:** Only node owning source entity publishes.
+
+```csharp
+public void PublishEvents(ISimulationView view, IDataWriter writer)
+{
+    var events = view.GetEvents<WeaponFireEvent>();
+    
+    foreach (var evt in events)
+    {
+        var ownership = view.GetComponentRO<NetworkOwnership>(evt.FiringEntity);
+        
+        // Only publish if WE own the firing entity
+        if (!ownership.IsLocallyOwned)
+            continue;
+        
+        writer.Write(new FirePDU { ... });
+    }
+}
+```
+
+**Why:** Prevents duplicate events. Without check:
+- Node 1 sees fire event → publishes
+- Node 2 sees fire event → publishes  
+- Node 3 sees fire event → publishes
+- Result: Network sees 3 fire events for 1 shot (wrong!)
+
+**2. Global/Broadcast Events (No Ownership)**
+
+Events not tied to entities: `MissionObjectiveComplete`, `TimeOfDayChanged`, `PhaseTransition`
+
+**Rule:** Published by designated authority node (e.g., mission server).
+
+**3. Multi-Entity Events (Complex Ownership)**
+
+Events involving multiple entities: `CollisionEvent`, `FormationJoinedEvent`
+
+**Rule:** Owner of primary/aggressor entity publishes. Deterministic tie-breaking.
+
+```csharp
+// Deterministic: Publish if we own EntityA, OR EntityB if EntityA unowned
+bool shouldPublish = ownershipA.IsLocallyOwned || 
+                    (ownershipB.IsLocallyOwned && !ownershipA.IsLocallyOwned);
+```
+
+### 7.3 Ownership Transfer Patterns
+
+**Static Ownership (Pre-assigned):**
+```csharp
+var entity = view.CreateEntity();
+cmd.SetComponent(entity, new NetworkOwnership
+{
+    OwnerId = GetLocalNodeId(),
+    IsLocallyOwned = true
+});
+```
+
+**Dynamic Ownership (Transferable):**
+```csharp
+// Transfer ownership when player enters vehicle
+cmd.SetComponent(vehicle, new NetworkOwnership
+{
+    OwnerId = playerOwnership.OwnerId,
+    IsLocallyOwned = playerOwnership.IsLocallyOwned
+});
+
+cmd.PublishEvent(new OwnershipTransferEvent
+{
+    Entity = vehicle,
+    NewOwnerId = playerOwnership.OwnerId
+});
+```
+
+**Proximity-Based Ownership:**
+```csharp
+// Transfer to nearest player's node (load balancing)
+var nearestPlayer = FindNearestPlayer(item);
+cmd.SetComponent(item, new NetworkOwnership
+{
+    OwnerId = GetOwnership(nearestPlayer).OwnerId,
+    IsLocallyOwned = IsLocal(nearestPlayer)
+});
+```
+
+### 7.4 Integration with ELM (Entity Lifecycle Manager)
+
+**Critical Coordination:** Network entities must go through ELM construction protocol.
+
+**Ingress Flow (Remote Entity Creation):**
+```
+1. DDS publishes EntityMaster (ID: 100, Type: T72)
+2. SST Translator sees new entity
+   → Does NOT call cmd.CreateEntity()
+   → Calls elm.RequestRemoteConstruction(100, "T72")
+3. ELM creates staged entity (Lifecycle.Constructing)
+   → Publishes ConstructionOrder event (local)
+4. SST Module receives ConstructionOrder
+   → Populates Position/Orientation from cached descriptor
+   → Sends ConstructionAck
+5. Physics Module receives ConstructionOrder
+   → Initializes collision shapes
+   → Sends ConstructionAck
+6. AI Module receives ConstructionOrder
+   → Loads behavior tree
+   → Sends ConstructionAck
+7. ELM receives all ACKs
+   → Transitions entity to Lifecycle.Active
+```
+
+**Why:** Prevents "ghost entities" (network entity arrives but physics/AI not ready → crash).
+
+**Egress Flow (Local Entity Creation):**
+```
+1. Game Logic creates local entity
+2. ELM publishes ConstructionOrder
+3. SST Module receives ConstructionOrder
+   → Publishes EntityMaster to DDS (announce to network)
+   → Sends ConstructionAck
+4. Other modules do setup, send ACKs
+5. ELM activates entity once all ACK
+```
+
+### 7.5 Implementation Notes
+
+**Network ID Mapping:** Each node may have different entity IDs for same logical entity. Requires bidirectional mapping:
+```csharp
+private Dictionary<long, Entity> _networkIdToEntity;
+private Dictionary<Entity, long> _entityToNetworkId;
+```
+
+**Diagnostic Logging:**
+```csharp
+if (ownership.IsLocallyOwned)
+    Console.WriteLine($"[OWNED] Entity {entity.Id} at {pos.Value}");
+else
+    Console.WriteLine($"[REMOTE] Entity {entity.Id} (Owner: {ownership.OwnerId}) at {pos.Value}");
+```
+
+**Reference:** See `FDP-ModuleHost-User-Guide.md` - "Network Ownership & Distributed Simulation" for detailed examples.
+
+---
+
+## Chapter 9: Time Control & Synchronization
+
+### 9.1 Specification
+
+**Objective:** Implement distributed time synchronization supporting Continuous (PLL) and Deterministic (lockstep) modes.
+
+**Requirements:**
+- All nodes maintain consistent "now" (<10ms variance for Continuous mode)
+- Support pause/resume/speed control synchronized across nodes
+- Continuous mode: Smooth, low-latency (PLL-based)
+- Deterministic mode: Frame-perfect reproducibility (lockstep ACKs)
+- Integration with ModuleHost deltaTime accumulation
+
+**Why Needed:**
+- **Event Ordering:** If Node A fires at T=10.00, Node B must process at T=10.00
+- **Smooth Playback:** PLL prevents time snaps (rubber-banding from naive sync)
+- **Deterministic Replay:** Lockstep enables exact replay from logs (debugging, compliance)
+- **Training Controls:** Pause/slow-mo/fast-forward for simulation training
+
+**Constraints:**
+- Wall clock drift: Hardware crystals drift seconds/day
+- Network jitter: Packet latency varies ±50ms
+- Module deltaTime: Must use PLL-adjusted time for convergence
+
+### 9.2 Design
+
+**GlobalTime Singleton:**
+
+```csharp
+public struct GlobalTime
+{
+    public double TotalTime;        // Elapsed simulation time (seconds)
+    public float DeltaTime;         // Time since last frame (seconds)
+    public float TimeScale;         // Speed multiplier (0.0 = paused, 1.0 = realtime)
+    public bool IsPaused => TimeScale == 0.0f;
+    public long FrameNumber;        // Current frame index
+}
+```
+
+**ITimeController Interface:**
+
+```csharp
+public interface ITimeController : IDisposable
+{
+    void Update(out float dt, out double totalTime);
+    void SetTimeScale(float scale);
+    float GetTimeScale();
+    TimeMode GetMode(); // Continuous or Deterministic
+}
+```
+
+### 9.3 Continuous Mode (PLL-Based Synchronization)
+
+**Simulation Time Equation:**
+
+$$T_{sim} = T_{base} + (T_{wall} - T_{start}) \times Scale$$
+
+Where:
+- $T_{sim}$ = Current simulation time
+- $T_{base}$ = Sim time when last speed change happened
+- $T_{wall}$ = Current wall clock time (UTC)
+- $T_{start}$ = Wall time when last speed change happened
+- $Scale$ = Speed coefficient (0.0 = paused, 1.0 = realtime, 2.0 = 2x speed)
+
+**Network Protocol:**
+
+**Topic:** `Sys.TimePulse` (1Hz + on-change)
+
+```csharp
+public struct TimePulseDescriptor
+{
+    public long MasterWallTicks;      // Master's UTC ticks at snapshot
+    public double SimTimeSnapshot;    // Master's sim time at snapshot
+    public float TimeScale;           // Current speed
+    public long SequenceId;           // Packet ordering
+}
+```
+
+**Phase-Locked Loop (PLL) Algorithm:**
+
+The PLL prevents time snaps by adjusting clock *speed* rather than *position*.
+
+**Key Components:**
+1. **Error Calculation:** $E = T_{master} - T_{local}$
+2. **Jitter Filtering:** Median of last 5 samples (reject outliers)
+3. **P-Controller:** $Correction = E \times Gain$ (Gain = 0.1)
+4. **Slew Limiting:** Max ±5% speed deviation (prevents physics instability)
+
+**Algorithm (Per Frame):**
+
+```csharp
+public void Update(out float dt, out double totalTime)
+{
+    // Get filtered error from last TimePulse
+    double filteredError = _errorFilter.GetFilteredValue();
+    
+    // P-Controller: Correction proportional to error
+    double correctionFactor = (filteredError / Stopwatch.Frequency) * _pllGain;
+    
+    // Clamp to ±5% (safety)
+    correctionFactor = Math.Clamp(correctionFactor, -0.05, 0.05);
+    
+    // Calculate raw wall delta
+    long rawDelta = _wallClock.ElapsedTicks - _lastFrameTicks;
+    _lastFrameTicks = _wallClock.ElapsedTicks;
+    
+    // Apply PLL correction to delta
+    long adjustedDelta = (long)(rawDelta * (1.0 + correctionFactor));
+    
+    // Update virtual wall clock (PLL-adjusted)
+    _virtualWallTicks += adjustedDelta;
+    
+    // Calculate sim delta (respecting time scale)
+    double virtualWallDelta = adjustedDelta / (double)Stopwatch.Frequency;
+    dt = (float)(virtualWallDelta * _timeScale);
+    
+    // Calculate total sim time
+    totalTime = /* ... equation above ... */;
+}
+```
+
+**How PLL Affects Module DeltaTime:**
+
+```
+1. PLL detects 5ms lag behind Master
+2. PLL applies +1% correction
+3. Adjusted wall delta: 16.83ms (instead of 16.67ms)
+4. SimDelta = 16.83ms × TimeScale (1.0) = 16.83ms
+5. ModuleHost accumulator gets 16.83ms
+6. Module.Tick(view, 16.83ms) called
+7. Physics: pos += vel × 16.83ms (entity moves slightly farther)
+8. Result: Simulation smoothly catches up without time snap!
+```
+
+**Visual Smoothness:** Slew rate limit (±5%) keeps dt variation imperceptible (16.6ms → 17.5ms max). User sees smooth motion.
+
+**Hard Snap Recovery:**
+
+If error >500ms (e.g., thread freeze):
+```csharp
+if (Math.Abs(errorMs) > _config.SnapThresholdMs)
+{
+    Console.WriteLine($"[TimePLL] Hard snap: {errorMs:F1}ms");
+    _virtualWallTicks = targetWallTicks;
+    _errorFilter.Reset();
+}
+```
+
+**Result:** Entities teleport (unavoidable), but simulation recovers.
+
+### 9.4 Deterministic Mode (Lockstep)
+
+**Network Protocol:**
+
+**Topic:** `Sys.FrameOrder` (Master → All)  
+**Topic:** `Sys.FrameAck` (All → Master)
+
+```csharp
+public struct FrameOrderDescriptor
+{
+    public long FrameID;        // Frame to execute
+    public float FixedDelta;    // Fixed dt (e.g., 0.016s)
+}
+
+public struct FrameAckDescriptor
+{
+    public long FrameID;        // Frame completed
+    public int NodeID;          // Who completed it
+}
+```
+
+**Lockstep Cycle:**
+
+```
+1. Master waits for all ACKs for Frame N-1
+2. Master publishes FrameOrder { FrameID: N, FixedDelta: 0.016 }
+3. Slave receives FrameOrder:
+   - Runs simulation with dt = 0.016
+   - Executes all systems
+   - BARRIER: Pauses at end of frame
+   - Publishes FrameAck { FrameID: N, NodeID: Me }
+4. Repeat
+```
+
+**Trade-Off:**
+- ✅ Perfect determinism (exact replay from logs)
+- ⚠️ High latency (slowest node bottlenecks all nodes)
+- ⚠️ No smooth playback if network lags
+
+### 9.5 Integration with ModuleHost
+
+**ModuleHostKernel Changes:**
+
+```csharp
+public class ModuleHostKernel
+{
+    private readonly ITimeController _timeController;
+    
+    public void Update(float _ /* Ignored */)
+    {
+        // 1. GET TIME FROM CONTROLLER
+        _timeController.Update(out float deltaTime, out double totalTime);
+        
+        // Push GlobalTime singleton to ECS
+        _liveWorld.SetSingleton(new GlobalTime
+        {
+            TotalTime = totalTime,
+            DeltaTime = deltaTime,
+            TimeScale = _timeController.GetTimeScale(),
+            FrameNumber = _currentFrame
+        });
+        
+        _currentFrame++;
+        
+        // 2-10. Existing phases...
+        
+        // 8. DISPATCH MODULES (use PLL-adjusted deltaTime)
+        DispatchModules(deltaTime);
+    }
+    
+    private void DispatchModules(float deltaTime)
+    {
+        foreach (var entry in _modules)
+        {
+            // Accumulate PLL-adjusted delta time
+            entry.AccumulatedDeltaTime += deltaTime;
+            
+            if (ShouldRunThisFrame(entry))
+            {
+                // Dispatch with accumulated (PLL-adjusted) time
+                entry.CurrentTask = Task.Run(() => 
+                    entry.Module.Tick(view, entry.AccumulatedDeltaTime));
+                entry.AccumulatedDeltaTime = 0.0f;
+            }
+        }
+    }
+}
+```
+
+### 9.6 Configuration Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `Sync.PulseFrequency` | 1.0 Hz | TimePulse rate |
+| `Sync.PLLGain` | 0.1 | Convergence speed (0.0-1.0) |
+| `Sync.MaxSlew` | 0.05 | Max frequency deviation (±5%) |
+| `Sync.SnapThresholdMs` | 500 ms | Hard snap trigger |
+| `Sync.JitterWindow` | 5 | Median filter samples |
+| `Sync.AverageLatencyMs` | 2 ms | Network latency compensation |
+
+### 9.7 Choosing the Right Mode
+
+**Use Continuous Mode when:**
+- ✅ Smooth, responsive playback needed
+- ✅ Network latency varies
+- ✅ Nodes have different performance
+- ✅ Training controls (pause/speed) required
+- ✅ "Good enough" sync acceptable (~20ms variance)
+
+**Use Deterministic Mode when:**
+- ✅ Perfect reproducibility required
+- ✅ Debugging distributed bugs
+- ✅ Regulatory compliance (audit trails)
+- ✅ Scientific validation
+- ⚠️ Can tolerate latency (slowest node bottleneck)
+
+**Recommendation:** Start with Continuous (90% use-cases). Add Deterministic only if strict reproducibility required.
+
+### 9.8 Implementation Notes
+
+**Verification Metrics:**
+```
+sys.clock.error_ms: ±2ms during steady state (LAN)
+Visual Test: Two screens side-by-side
+  Rotating radar (360°/sec) points same angle within 1-2 frames
+```
+
+**Reference:** See `FDP-ModuleHost-User-Guide.md` - "Time Control & Synchronization" and `docs/reference-archive/drill-clock-sync.md` for PLL algorithm details.
+
+---
+
 ## Testing Strategy
 
 ### Unit Tests
