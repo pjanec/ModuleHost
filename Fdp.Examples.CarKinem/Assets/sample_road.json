@@ -1,0 +1,102 @@
+{
+  "nodes": [
+    { "id": 0, "position": { "x": 100, "y": 100 } },
+    { "id": 1, "position": { "x": 100, "y": 50 } },
+    { "id": 2, "position": { "x": 100, "y": 150 } },
+    { "id": 3, "position": { "x": 150, "y": 100 } },
+    { "id": 4, "position": { "x": 50, "y": 100 } }
+  ],
+  "segments": [
+    {
+      "id": 0,
+      "startNodeId": 4,
+      "endNodeId": 0,
+      "controlPoints": {
+        "p0": { "x": 50, "y": 100 },
+        "t0": { "x": 50, "y": 0 },
+        "p1": { "x": 100, "y": 100 },
+        "t1": { "x": 50, "y": 0 }
+      },
+      "speedLimit": 20.0,
+      "laneWidth": 3.5,
+      "laneCount": 1
+    },
+    {
+      "id": 1,
+      "startNodeId": 0,
+      "endNodeId": 3,
+      "controlPoints": {
+        "p0": { "x": 100, "y": 100 },
+        "t0": { "x": 50, "y": 0 },
+        "p1": { "x": 150, "y": 100 },
+        "t1": { "x": 50, "y": 0 }
+      },
+      "speedLimit": 20.0,
+      "laneWidth": 3.5,
+      "laneCount": 1
+    },
+    {
+      "id": 2,
+      "startNodeId": 1,
+      "endNodeId": 0,
+      "controlPoints": {
+        "p0": { "x": 100, "y": 50 },
+        "t0": { "x": 0, "y": 50 },
+        "p1": { "x": 100, "y": 100 },
+        "t1": { "x": 0, "y": 50 }
+      },
+      "speedLimit": 20.0,
+      "laneWidth": 3.5,
+      "laneCount": 1
+    },
+    {
+      "id": 3,
+      "startNodeId": 0,
+      "endNodeId": 2,
+      "controlPoints": {
+        "p0": { "x": 100, "y": 100 },
+        "t0": { "x": 0, "y": 50 },
+        "p1": { "x": 100, "y": 150 },
+        "t1": { "x": 0, "y": 50 }
+      },
+      "speedLimit": 20.0,
+      "laneWidth": 3.5,
+      "laneCount": 1
+    },
+    {
+      "id": 4,
+      "startNodeId": 4,
+      "endNodeId": 1,
+      "controlPoints": {
+        "p0": { "x": 50, "y": 100 },
+        "t0": { "x": 50, "y": 0 },
+        "p1": { "x": 100, "y": 50 },
+        "t1": { "x": 0, "y": -50 }
+      },
+      "speedLimit": 15.0,
+      "laneWidth": 3.5,
+      "laneCount": 1
+    },
+     {
+      "id": 5,
+      "startNodeId": 2,
+      "endNodeId": 3,
+      "controlPoints": {
+        "p0": { "x": 100, "y": 150 },
+        "t0": { "x": 0, "y": -50 },
+        "p1": { "x": 150, "y": 100 },
+        "t1": { "x": 50, "y": 0 }
+      },
+      "speedLimit": 15.0,
+      "laneWidth": 3.5,
+      "laneCount": 1
+    }
+  ],
+  "metadata": {
+    "worldBounds": {
+      "min": { "x": 0, "y": 0 },
+      "max": { "x": 200, "y": 200 }
+    },
+    "gridCellSize": 10.0
+  }
+}
