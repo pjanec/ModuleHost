@@ -1,23 +1,35 @@
 # API Reference - Hybrid GDB+SoD Architecture
 
-**Version:** 2.0  
-**Date:** January 4, 2026  
+**Version:** 2.1  
+**Date:** January 8, 2026  
+**Updated:** Post-BATCH-05.1 (Component Mask Optimization)  
 **Namespace Index:**
 - Fdp.Kernel
 - ModuleHost.Core.Abstractions
 - ModuleHost.Core.Providers
-- ModuleHost.Framework
+- ModuleHost.Core.Resilience
+
+> **Note:** For conceptual guides and workflows, see [FDP-ModuleHost-User-Guide.md](./FDP-ModuleHost-User-Guide.md)
 
 ---
 
 ## Table of Contents
 
 1. [FDP Kernel APIs](#fdp-kernel-apis)
+   - [Component Dirty Tracking](#component-dirty-tracking) ⭐ BATCH-01
+   - [Event Bus Active Tracking](#event-bus-active-tracking) ⭐ BATCH-02
+   - [Event Bus Cleanup](#event-bus-cleanup) ⭐ BATCH-03
 2. [Core Abstractions](#core-abstractions)
+   - [ExecutionPolicy](#executionpolicy) ⭐ BATCH-05
+   - [RunMode & DataStrategy](#runmode--datastrategy) ⭐ BATCH-05
 3. [Snapshot Providers](#snapshot-providers)
+   - [SnapshotPool](#snapshotpool) ⭐ BATCH-03
 4. [Module Framework](#module-framework)
-5. [Utility Types](#utility-types)
-6. [Examples](#examples)
+5. [Resilience & Safety](#resilience--safety) ⭐ BATCH-04
+   - [ModuleCircuitBreaker](#modulecircuitbreaker)
+   - [ModuleStats](#modulestats)
+6. [Utility Types](#utility-types)
+7. [Examples](#examples)
 
 ---
 
@@ -173,6 +185,147 @@ Because this is shallow copy, Tier 2 components **MUST** be immutable records. O
 
 ---
 
+### Component Dirty Tracking
+
+**Implemented in:** BATCH-01 ⭐  
+**Namespace:** `Fdp.Kernel`
+
+#### IComponentTable.HasChanges()
+
+```csharp
+bool HasChanges(uint sinceVersion)
+```
+
+**Description:**  
+Checks if a component table has been modified since a specific version. Used for reactive scheduling.
+
+**Parameters:**
+- `sinceVersion` - Version to compare against (typically module's last seen tick)
+
+**Returns:** `true` if any chunk in this table has version > `sinceVersion`
+
+**Algorithm:**  
+Lazy O(chunks) scan comparing chunk versions. Typically <50ns for tables with few chunks.
+
+**Usage:**
+```csharp
+// Check if Position component changed since tick 1000
+if (positionTable.HasChanges(1000))
+{
+    Console.WriteLine("Position data modified!");
+}
+```
+
+---
+
+#### EntityRepository.HasComponentChanged()
+
+```csharp
+public bool HasComponentChanged(Type componentType, uint sinceTick)
+```
+
+**Description:**  
+Public API wrapping `HasChanges()` for type-based lookup.
+
+**Parameters:**
+- `componentType` - Component type to check
+- `sinceTick` - Tick number for comparison
+
+**Returns:** `true` if component data changed
+
+**Usage:**
+```csharp
+// Reactive module trigger
+if (repo.HasComponentChanged(typeof(Health), myLastTick))
+{
+    RunHealthAnalysis();
+}
+```
+
+**Performance:** O(chunks) + type lookup, typically <100ns
+
+**See Also:** Reactive Scheduling (User Guide)
+
+---
+
+### Event Bus Active Tracking
+
+**Implemented in:** BATCH-02 ⭐  
+**Namespace:** `Fdp.Kernel`
+
+#### FdpEventBus.HasEvent<T>()
+
+```csharp
+public bool HasEvent<T>() where T : unmanaged
+public bool HasManagedEvent<T>() where T : class
+public bool HasEvent(Type eventType)
+```
+
+**Description:**  
+O(1) check if event type exists in current frame's event bus.
+
+**Implementation:**  
+Uses `HashSet<int>` populated during `Swap Buffers()` for constant-time lookup.
+
+**Returns:** `true` if at least one event of type `T` exists
+
+**Usage:**
+```csharp
+// Reactive trigger: module only runs if ExplosionEvent exists
+if (bus.HasEvent<ExplosionEvent>())
+{
+    var explosions = bus.ConsumeEvents<ExplosionEvent>();
+    ProcessExplosions(explosions);
+}
+```
+
+**Performance:** ~5ns HashSet lookup
+
+**See Also:**  
+- `ConsumeEvents<T>()` - Retrieve actual events
+- Reactive Scheduling (User Guide)
+
+---
+
+### Event Bus Cleanup
+
+**Implemented in:** BATCH-03 ⭐  
+**Namespace:** `Fdp.Kernel`
+
+#### FdpEventBus.ClearAll()
+
+```csharp
+public void ClearAll()
+```
+
+**Description:**  
+Resets all event buffers and active event tracking. Used when recycling pooled snapshots to prevent "ghost events" from previous usage.
+
+**Behavior:**
+- Clears all native event buffers
+- Clears all managed event buffers
+- Clears active event ID set
+- Resets internal state
+
+**Called by:** `EntityRepository.SoftClear()` during snapshot pool return
+
+**Usage:**
+```csharp
+// Internal: Snapshot pool recycling
+public void Return(EntityRepository repo)
+{
+    repo.SoftClear(); // → calls Bus.ClearAll()
+    _pool.Push(repo);
+}
+```
+
+**Important:**  
+Without this, reused snapshots would contain stale events from previous frames, causing incorrect reactive triggers.
+
+**See Also:** SnapshotPool, Convoy Pattern (User Guide)
+
+---
+
 ### EventAccumulator
 
 **Namespace:** `Fdp.Kernel`  
@@ -253,6 +406,129 @@ Replica now has events from `[lastSeenTick+1 ... current]`, enabling slow module
 ---
 
 ## Core Abstractions
+
+### ExecutionPolicy
+
+**Implemented in:** BATCH-05 ⭐  
+**Namespace:** `ModuleHost.Core.Abstractions`
+
+```csharp
+public struct ExecutionPolicy
+{
+    public RunMode Mode { get; set; }
+    public DataStrategy Strategy { get; set; }
+    public int TargetFrequencyHz { get; set; }
+    public int MaxExpectedRuntimeMs { get; set; }
+    public int FailureThreshold { get; set; }
+    public int CircuitResetTimeoutMs { get; set; }
+    
+    // Factory methods
+    public static ExecutionPolicy Synchronous();
+    public static ExecutionPolicy FastReplica();
+    public static ExecutionPolicy SlowBackground(int hz);
+    public static ExecutionPolicy Custom();
+    
+    // Fluent API
+    public ExecutionPolicy WithMode(RunMode mode);
+    public ExecutionPolicy WithStrategy(DataStrategy strategy);
+    public ExecutionPolicy WithFrequency(int hz);
+    public ExecutionPolicy WithTimeout(int ms);
+    
+    public void Validate();
+}
+```
+
+**Description:**  
+Configuration struct defining how and when a module executes. Replaces the old `ModuleTier` enum with fine-grained control.
+
+**Properties:**
+- `Mode` - Synchronous/FrameSynced/Asynchronous execution
+- `Strategy` - Direct/GDB/SoD data access
+- `TargetFrequencyHz` - Desired execution frequency (1-60Hz)
+- `MaxExpectedRuntimeMs` - Timeout for circuit breaker (default: 100ms)
+- `FailureThreshold` - Consecutive failures before circuit opens (default: 3)
+- `CircuitResetTimeoutMs` - Cooldown before retry (default: 5000ms)
+
+**Factory Methods:**
+
+```csharp
+// Main thread, direct access (physics, input)
+ExecutionPolicy.Synchronous()
+// → Mode=Synchronous, Strategy=Direct, 60Hz
+
+// Frame-synced, double-buffered (network, recorder)
+ExecutionPolicy.FastReplica()
+// → Mode=FrameSynced, Strategy=GDB, 60Hz
+
+// Background async, snapshot-on-demand (AI, analytics)
+ExecutionPolicy.SlowBackground(10)  // 10Hz
+// → Mode=Asynchronous, Strategy=SoD
+
+// Custom configuration
+ExecutionPolicy.Custom()
+    .WithMode(RunMode.FrameSynced)
+    .WithStrategy(DataStrategy.GDB)
+    .WithFrequency(30)
+    .WithTimeout(50)
+```
+
+**Validation Rules:**
+- Synchronous mode MUST use Direct strategy
+- Asynchronous mode CANNOT use Direct strategy
+- TargetFrequencyHz must be 1-60Hz
+- Validated automatically during `ModuleHostKernel.Initialize()`
+
+**See Also:** RunMode, DataStrategy, IModule.Policy
+
+---
+
+### RunMode & DataStrategy
+
+**Implemented in:** BATCH-05 ⭐  
+**Namespace:** `ModuleHost.Core.Abstractions`
+
+#### RunMode Enum
+
+```csharp
+public enum RunMode
+{
+    Synchronous,    // Main thread, blocks simulation
+    FrameSynced,    // Every frame, async dispatch
+    Asynchronous    // Sporadic, async dispatch
+}
+```
+
+**Values:**
+- `Synchronous` - Runs on main thread (only for fast, essential tasks like physics/input)
+- `FrameSynced` - Dispatched every frame but runs asynchronously
+- `Asynchronous` - Dispatched at target frequency (e.g., 10Hz for AI)
+
+#### DataStrategy Enum
+
+```csharp
+public enum DataStrategy
+{
+    Direct,    // Live world access (Synchronous only)
+    GDB,       // Double-buffered replica (fast modules)
+    SoD        // Snapshot-on-demand (slow modules)
+}
+```
+
+**Values:**
+- `Direct` - Access live `EntityRepository` directly (no snapshot)
+- `GDB` - Use persistent double-buffered replica
+- `SoD` - Use pooled snapshot with filtered sync
+
+**Valid Combinations:**
+| Mode | Direct | GDB | SoD |
+|------|--------|-----|-----|
+| Synchronous | ✅ | ❌ | ❌ |
+| FrameSynced | ❌ | ✅ | ⚠️ Rare |
+| Asynchronous | ❌ | ⚠️ Rare | ✅ |
+
+**See Also:** ExecutionPolicy, Provider Assignment (User Guide)
+
+---
 
 ### ISimulationView
 
@@ -666,6 +942,44 @@ if (provider.TryUpdateReplica())
 
 ---
 
+### SnapshotPool
+
+**Implemented in:** BATCH-03 ⭐  
+**Namespace:** `ModuleHost.Core.Providers`
+
+```csharp
+public class SnapshotPool
+{
+    public SnapshotPool(Action<EntityRepository> schemaSetup, int warmupCount = 0);
+    
+    public EntityRepository Rent();
+    public void Return(EntityRepository repo);
+}
+```
+
+**Description:**  
+Thread-safe pool for `EntityRepository` instances. Reduces GC pressure by reusing snapshots.
+
+**Constructor:**
+- `schemaSetup` - Action to register components on new repositories
+- `warmupCount` - Pre-allocate this many repositories
+
+**Methods:**
+- `Rent()` - Get repository from pool (or create new)
+- `Return(repo)` - Clear via `Soft Clear()` and return to pool
+
+**Thread Safety:** Uses `ConcurrentStack<T>` (lock-free)
+
+**Performance:**
+- Rent: ~50ns (if available in pool)
+- Return: ~100ns + SoftClear cost
+
+**Used By:** OnDemandProvider, SharedSnapshotProvider
+
+**See Also:** Snapshot Pooling (User Guide)
+
+---
+
 ## Module Framework
 
 ### IModule
@@ -771,6 +1085,149 @@ public interface IModule
 
 ---
 
+## Resilience & Safety
+
+**Implemented in:** BATCH-04 ⭐  
+**Namespace:** `ModuleHost.Core.Resilience`
+
+ModuleHost includes built-in fault isolation to prevent faulty modules from crashing or hanging the simulation.
+
+**See Also:** Resilience & Safety (User Guide)
+
+---
+
+### ModuleCircuitBreaker
+
+```csharp
+public class ModuleCircuitBreaker
+{
+    public ModuleCircuitBreaker(int failureThreshold = 3, int resetTimeoutMs = 5000);
+    
+    public CircuitState State { get; }
+    public int FailureCount { get; }
+    
+    public bool CanRun();
+    public void RecordSuccess();
+    public void RecordFailure(string reason);
+    public void Reset();
+}
+
+public enum CircuitState
+{
+    Closed,     // Normal operation
+    Open,       // Module disabled (too many failures)
+    HalfOpen    // Probation period (testing recovery)
+}
+```
+
+**Description:**  
+Three-state circuit breaker for module fault isolation. Tracks module health and disables modules that fail repeatedly.
+
+**Constructor:**
+- `failureThreshold` - Consecutive failures before opening (default: 3)
+- `resetTimeoutMs` - Cooldown before attempting recovery (default: 5000ms)
+
+**Properties:**
+- `State` - Current circuit state (Closed/Open/HalfOpen)
+- `FailureCount` - Consecutive failures recorded
+
+**Methods:**
+
+#### CanRun()
+```csharp
+public bool CanRun()
+```
+Check if module should execute this frame.
+
+**Returns:**
+- `Closed` → `true` (normal operation)
+- `Open` → `false` (disabled, unless timeout elapsed → transitions to HalfOpen)
+- `HalfOpen` → `true` (allow ONE execution for recovery test)
+
+#### RecordSuccess()
+```csharp
+public void RecordSuccess()
+```
+Record successful execution. Resets failure count and closes circuit if in HalfOpen state.
+
+#### RecordFailure()
+```csharp
+public void RecordFailure(string reason)
+```
+Record failure (exception or timeout). Increments count and opens circuit if threshold exceeded.
+
+**State Transitions:**
+- `Closed` → `Open` (when failureCount >= threshold)
+- `Open` → `HalfOpen` (after resetTimeout elapsed)
+- `HalfOpen` → `Closed` (on success)
+- `HalfOpen` → `Open` (on failure)
+
+**Thread Safety:** Thread-safe (uses `lock`)
+
+**Usage:**
+```csharp
+var breaker = new ModuleCircuitBreaker(failureThreshold: 3, resetTimeoutMs: 5000);
+
+// Before execution
+if (!breaker.CanRun())
+{
+    Console.WriteLine("Module disabled by circuit breaker");
+    return;
+}
+
+try
+{
+    module.Tick(view, deltaTime);
+    breaker.RecordSuccess();
+}
+catch (Exception ex)
+{
+    breaker.RecordFailure(ex.Message);
+}
+```
+
+**See Also:**  
+- ModuleStats
+- IModule resilience properties
+- Zombie Tasks (User Guide)
+
+---
+
+### ModuleStats
+
+```csharp
+public struct ModuleStats
+{
+    public string ModuleName { get; set; }
+    public int ExecutionCount { get; set; }
+    public CircuitState CircuitState { get; set; }
+    public int FailureCount { get; set; }
+}
+```
+
+**Description:**  
+Diagnostic struct returned by `ModuleHostKernel.GetExecutionStats()`.
+
+**Properties:**
+- `ModuleName` - Module identifier
+- `ExecutionCount` - Times executed since last stats retrieval
+- `CircuitState` - Current circuit breaker state
+- `FailureCount` - Consecutive failures
+
+**Usage:**
+```csharp
+var stats = kernel.GetExecutionStats();
+foreach (var s in stats)
+{
+    Console.WriteLine($"{s.ModuleName}: {s.CircuitState}, " +
+                      $"Runs={s.ExecutionCount}, Failures={s.FailureCount}");
+}
+```
+
+**Note:** `GetExecutionStats()` resets `ExecutionCount` to 0 after returning (read-once behavior).
+
+---
+
 ## Utility Types
 
 ### BitMask256
@@ -787,6 +1244,8 @@ public struct BitMask256
     public void Set(int typeId);
     public bool IsSet(int typeId);
     public void Clear(int typeId);
+    
+    public BitMask256 BitwiseOr(BitMask256 other);  // BATCH-03
 }
 ```
 
@@ -800,6 +1259,12 @@ aiMask.Set(typeof(Health));
 
 // Use in SoD
 snapshot.SyncFrom(live, aiMask);
+
+// Convoy union (BATCH-03)
+// Combine requirements from multiple modules
+var mask1 = module1Mask;  // Position, Health
+var mask2 = module2Mask;  // Health, Velocity
+var unionMask = mask1.BitwiseOr(mask2);  // Position | Health | Velocity
 ```
 
 ---
