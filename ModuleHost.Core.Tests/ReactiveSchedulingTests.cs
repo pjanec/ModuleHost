@@ -1,4 +1,3 @@
-// File: ModuleHost.Core.Tests/ReactiveSchedulingTests.cs
 using System;
 using System.Linq;
 using System.Threading.Tasks;
@@ -6,6 +5,8 @@ using Xunit;
 using Fdp.Kernel;
 using ModuleHost.Core.Abstractions;
 using ModuleHost.Core.Providers;
+using System.Collections.Generic;
+using System.Threading;
 
 namespace ModuleHost.Core.Tests
 {
@@ -14,9 +15,21 @@ namespace ModuleHost.Core.Tests
         class MockModule : IModule
         {
             public string Name => "MockModule";
-            public ModuleTier Tier => ModuleTier.Slow; // Async
-            public int UpdateFrequency => 1; // Default
-            public ModuleExecutionPolicy Policy { get; set; } = ModuleExecutionPolicy.DefaultFast; // FrameSynced for testing
+            
+            // Use ExecutionPolicy from BATCH-05
+            public ExecutionPolicy Policy { get; set; } = ExecutionPolicy.FastReplica();
+            
+            public List<Type> TriggersEvents { get; } = new();
+            public List<Type> TriggersComponents { get; } = new();
+
+            // Implementing Interface Properties
+            public IReadOnlyList<Type> WatchEvents => TriggersEvents;
+            public IReadOnlyList<Type> WatchComponents => TriggersComponents;
+
+            // Legacy
+            public ModuleTier Tier => ModuleTier.Slow;
+            public int UpdateFrequency => 1;
+
             public void RegisterSystems(ISystemRegistry registry) { }
             public void Tick(ISimulationView view, float deltaTime) { }
         }
@@ -24,12 +37,17 @@ namespace ModuleHost.Core.Tests
         class MockAsyncModule : IModule
         {
             public string Name => "MockAsyncModule";
-            public ModuleTier Tier => ModuleTier.Slow;
-            public int UpdateFrequency => 1;
-            public ModuleExecutionPolicy Policy { get; set; } = ModuleExecutionPolicy.DefaultSlow;
+            public ExecutionPolicy Policy { get; set; }
             public TimeSpan TaskDuration { get; set; }
             public int RunCount { get; private set; }
             
+            public List<Type> TriggersComponents { get; } = new();
+            public IReadOnlyList<Type> WatchComponents => TriggersComponents; 
+
+            // Legacy
+            public ModuleTier Tier => ModuleTier.Slow;
+            public int UpdateFrequency => 1;
+
             public void RegisterSystems(ISystemRegistry registry) { }
             
             public void Tick(ISimulationView view, float deltaTime)
@@ -37,7 +55,7 @@ namespace ModuleHost.Core.Tests
                 RunCount++;
                 if (TaskDuration > TimeSpan.Zero)
                 {
-                    System.Threading.Thread.Sleep(TaskDuration);
+                    Thread.Sleep(TaskDuration);
                 }
             }
         }
@@ -56,20 +74,27 @@ namespace ModuleHost.Core.Tests
 
             var module = new MockModule 
             { 
-                Policy = ModuleExecutionPolicy.FixedInterval(100, ModuleMode.FrameSynced) // FrameSynced
+               // 10Hz = every 6 frames at 60Hz base
+                Policy = ExecutionPolicy.Synchronous().WithFrequency(10) 
             };
             kernel.RegisterModule(module);
             kernel.Initialize();
 
-            // 1. Update with small delta (50ms) -> Accumulated 50 < 100 -> No Run
-            kernel.Update(0.050f);
+            // Run 5 frames (should not run yet, since 0+1 < 6)
+            for(int i=0; i<5; i++) 
+            {
+                kernel.Update(0.016f); 
+            }
+            
             var stats = kernel.GetExecutionStats();
-            Assert.Equal(0, stats.First(s => s.ModuleName == "MockModule").ExecutionCount);
+            var mStat = stats.First(s => s.ModuleName == "MockModule");
+            Assert.Equal(0, mStat.ExecutionCount);
 
-            // 2. Update with more delta (60ms) -> Accumulated 110 > 100 -> Run
-            kernel.Update(0.060f);
+            // Frame 6
+            kernel.Update(0.016f);
             stats = kernel.GetExecutionStats();
-            Assert.Equal(1, stats.First(s => s.ModuleName == "MockModule").ExecutionCount); 
+            mStat = stats.First(s => s.ModuleName == "MockModule");
+            Assert.Equal(1, mStat.ExecutionCount); 
         }
 
         [Fact]
@@ -83,13 +108,15 @@ namespace ModuleHost.Core.Tests
 
             var module = new MockModule 
             { 
-                Policy = ModuleExecutionPolicy.OnEvent<TestEvent>(ModuleMode.FrameSynced)
+                // 1Hz to avoid periodic noise
+                Policy = ExecutionPolicy.Synchronous().WithFrequency(1)
             };
+            module.TriggersEvents.Add(typeof(TestEvent));
+            
             kernel.RegisterModule(module);
             kernel.Initialize();
 
             // 1. No Event
-            repo.Bus.SwapBuffers(); 
             kernel.Update(0.1f);
             Assert.Equal(0, kernel.GetExecutionStats().First(s => s.ModuleName == "MockModule").ExecutionCount);
 
@@ -100,6 +127,9 @@ namespace ModuleHost.Core.Tests
 
             // 3. No new event next frame
             kernel.Update(0.1f);
+            // Should reset execution count in stats call (GetExecutionStats resets), but actually GetExecutionStats returns accumulated since last call?
+            // ModuleHostKernel.GetExecutionStats() does: entry.ExecutionCount; then resets entry.ExecutionCount = 0.
+            // So if we call it again, we expect 0 if it didn't run.
             Assert.Equal(0, kernel.GetExecutionStats().First(s => s.ModuleName == "MockModule").ExecutionCount);
         }
 
@@ -113,8 +143,10 @@ namespace ModuleHost.Core.Tests
 
             var module = new MockModule 
             { 
-                Policy = ModuleExecutionPolicy.OnComponentChange<TestComponent>(ModuleMode.FrameSynced)
+                 Policy = ExecutionPolicy.Synchronous().WithFrequency(1)
             };
+            module.TriggersComponents.Add(typeof(TestComponent));
+            
             kernel.RegisterModule(module);
             kernel.Initialize();
 
@@ -146,9 +178,10 @@ namespace ModuleHost.Core.Tests
 
             var asyncModule = new MockAsyncModule 
             { 
-                Policy = ModuleExecutionPolicy.OnComponentChange<TestComponent>(ModuleMode.Async),
-                TaskDuration = TimeSpan.FromMilliseconds(50) // Takes ~3 frames at 16ms
+                Policy = ExecutionPolicy.SlowBackground(1),
+                TaskDuration = TimeSpan.FromMilliseconds(50) 
             };
+            asyncModule.TriggersComponents.Add(typeof(TestComponent));
             
             kernel.RegisterModule(asyncModule);
             kernel.Initialize();
@@ -162,18 +195,16 @@ namespace ModuleHost.Core.Tests
             repo.SetComponent(e, new TestComponent { X = 2 });
             kernel.Update(0.016f);
             
-            // Frame 3: Module still running (total 32ms < 50ms)
-            // Wait a bit to ensure task completes eventually
+            // Wait for task
             await Task.Delay(100);
             kernel.Update(0.016f); // Harvest
             
-            // Frame 4: Should re-trigger because change happened WHILE running in Frame 2
+            // Should re-trigger
             kernel.Update(0.016f);
             
-            // Wait for 2nd run to finish (it starts async)
             await Task.Delay(100);
             
-            Assert.Equal(2, asyncModule.RunCount); // Ran twice
+            Assert.Equal(2, asyncModule.RunCount); 
         }
     }
 }

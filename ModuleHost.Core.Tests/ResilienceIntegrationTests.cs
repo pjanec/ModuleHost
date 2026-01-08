@@ -20,6 +20,7 @@ namespace ModuleHost.Core.Tests
             public string Name { get; set; } = "TestModule";
             public ModuleTier Tier { get; set; } = ModuleTier.Slow;
             public int UpdateFrequency { get; set; } = 1;
+            
             public int? MaxExpectedRuntimeMs { get; set; }
             public int? FailureThreshold { get; set; }
             public int? CircuitResetTimeoutMs { get; set; }
@@ -27,14 +28,24 @@ namespace ModuleHost.Core.Tests
             public Action<ISimulationView, float> TickAction { get; set; }
             public int ExecutionCount { get; set; }
 
-            // Explicit implementation to allow null overrides to fallback to default (or we implement logic)
-            // But IModule properties use expression bodies in interface default.
-            // If I override them, I must provide value.
-            // So I will just implement them and use them.
-            
-            int IModule.MaxExpectedRuntimeMs => MaxExpectedRuntimeMs ?? 500;
-            int IModule.FailureThreshold => FailureThreshold ?? 3;
-            int IModule.CircuitResetTimeoutMs => CircuitResetTimeoutMs ?? 5000;
+            // Override Policy to use these values
+            public ExecutionPolicy Policy 
+            {
+                get
+                {
+                    // Base policy from Tier
+                    var p = Tier == ModuleTier.Fast 
+                        ? ExecutionPolicy.FastReplica() 
+                        : ExecutionPolicy.SlowBackground(UpdateFrequency <= 1 ? 60 : 60/UpdateFrequency);
+                    
+                    // Apply overrides
+                    if (MaxExpectedRuntimeMs.HasValue) p.MaxExpectedRuntimeMs = MaxExpectedRuntimeMs.Value;
+                    if (FailureThreshold.HasValue) p.FailureThreshold = FailureThreshold.Value;
+                    if (CircuitResetTimeoutMs.HasValue) p.CircuitResetTimeoutMs = CircuitResetTimeoutMs.Value;
+                    
+                    return p;
+                }
+            }
 
             public void Tick(ISimulationView view, float deltaTime)
             {
@@ -62,14 +73,9 @@ namespace ModuleHost.Core.Tests
                 Name = "HungModule",
                 TickAction = (view, dt) =>
                 {
-                    // Infinite loop or long sleep
-                    // Loop is better to simulate CPU bound hang, but sleep is easier to cancel test if needed.
-                    // Instructions said "Infinite loop".
-                    // But we want it to timeout.
                     while (true)
                     {
                         Thread.Sleep(10);
-                        // Check logic to break if needed? No, it should be killed/abandoned.
                     }
                 },
                 MaxExpectedRuntimeMs = 200,
@@ -87,7 +93,6 @@ namespace ModuleHost.Core.Tests
                 await Task.Delay(50); // Allow async tasks to run
             }
             
-            // Assert: System continues running (didn't freeze)
             // Assert: Module's circuit breaker opened
             var stats = kernel.GetExecutionStats();
             var modStat = stats.First(s => s.ModuleName == "HungModule");
@@ -111,12 +116,9 @@ namespace ModuleHost.Core.Tests
                 Name = "HealthyModule",
                 TickAction = (view, dt) =>
                 {
-                    // Increment a counter we track externally or via stats
-                    // The Kernel stats reset every frame (or get call).
-                    // We can track via the closure variable but execution happens on another thread.
-                    // Interlocked increment.
+                    // Logic ran
                 },
-                ExecutionCount = 0 // We'll check kernel stats
+                ExecutionCount = 0 
             };
             
             using var kernel = new ModuleHostKernel(_liveWorld, _eventAccum);
@@ -136,7 +138,6 @@ namespace ModuleHost.Core.Tests
                     healthyRunCount++;
             }
             
-            // Assert: Healthy module continued running
             Assert.True(healthyRunCount > 0);
             
             // Assert: Crashing module's circuit opened
@@ -156,8 +157,6 @@ namespace ModuleHost.Core.Tests
                 TickAction = (view, dt) =>
                 {
                     int c = Interlocked.Increment(ref executionCount);
-                    
-                    // Fail first 3 times, then succeed
                     if (c <= 3)
                     {
                         throw new Exception($"Flaky failure {c}");
@@ -186,11 +185,8 @@ namespace ModuleHost.Core.Tests
             // Wait for reset timeout
             await Task.Delay(600);
             
-            // Run more frames - should attempt recovery
-            // Reset local execution count or just continue?
-            // Next execution will be #4 -> Success.
-            
-            // Need to trigger update to make it try running
+            // Run more frames - should attempt recovery (HalfOpen -> Closed)
+            // Need to update multiple times as first one might be the probe
             for (int i = 0; i < 10; i++)
             {
                 kernel.Update(0.016f);
@@ -218,7 +214,6 @@ namespace ModuleHost.Core.Tests
             kernel.RegisterModule(badModule3);
             kernel.Initialize();
             
-            // Run simulation
             int goodRuns = 0;
             for (int i = 0; i < 20; i++)
             {
@@ -229,10 +224,8 @@ namespace ModuleHost.Core.Tests
                 if (s.First(m => m.ModuleName == "Good").ExecutionCount > 0) goodRuns++;
             }
             
-            // Assert: Good module kept running
             Assert.True(goodRuns > 0);
             
-            // Assert: Bad modules all opened circuits
             var stats = kernel.GetExecutionStats();
             Assert.All(stats.Where(s => s.ModuleName.StartsWith("Bad")),
                 s => Assert.Equal(CircuitState.Open, s.CircuitState));
@@ -249,7 +242,6 @@ namespace ModuleHost.Core.Tests
             var stats = kernel.GetExecutionStats();
             var moduleStat = stats.First(s => s.ModuleName == "TestModule");
             
-            // Assert.NotNull(moduleStat.CircuitState); // Value type, always 'not null' but we check properties
             Assert.Equal(CircuitState.Closed, moduleStat.CircuitState);
             Assert.Equal(0, moduleStat.FailureCount);
         }
@@ -271,20 +263,15 @@ namespace ModuleHost.Core.Tests
             kernel.RegisterModule(hungModule);
             kernel.Initialize();
             
-            // Run 100 frames
             for (int i = 0; i < 100; i++)
             {
                 kernel.Update(0.016f);
                 await Task.Delay(10);
             }
             
-            // After circuit opens (at ~2 failures), zombie count should stabilize
             int finalThreadCount = Process.GetCurrentProcess().Threads.Count;
             int zombieThreads = finalThreadCount - initialThreadCount;
             
-            // Should have <= FailureThreshold zombie tasks (2), not 100.
-            // Note: Thread counts in ThreadPool are heuristic. 
-            // We use a safe margin.
             Assert.True(zombieThreads <= 10, 
                 $"Expected <=10 zombie threads, found {zombieThreads}");
         }
@@ -307,7 +294,6 @@ namespace ModuleHost.Core.Tests
             kernel.RegisterModule(module);
             kernel.Initialize();
             
-            // Run 5 frames
             for (int i = 0; i < 5; i++)
             {
                 kernel.Update(0.016f);
@@ -317,8 +303,6 @@ namespace ModuleHost.Core.Tests
             var stats = kernel.GetExecutionStats();
             var moduleStat = stats.First(s => s.ModuleName == "CrashingAndHanging");
             
-            // Should count as ONE failure per execution, not double-counted (or zero)
-            // 3 failures should open circuit.
             Assert.Equal(CircuitState.Open, moduleStat.CircuitState);
         }
     }

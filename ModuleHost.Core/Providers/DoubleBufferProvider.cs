@@ -1,4 +1,3 @@
-// File: ModuleHost.Core/Providers/DoubleBufferProvider.cs
 using System;
 using Fdp.Kernel;
 using ModuleHost.Core.Abstractions;
@@ -15,20 +14,37 @@ namespace ModuleHost.Core.Providers
         private readonly EntityRepository _liveWorld;
         private readonly EntityRepository _replica;
         private readonly EventAccumulator _eventAccumulator;
+        private readonly BitMask256? _mask;
         private uint _lastSyncTick;
         
-        public DoubleBufferProvider(EntityRepository liveWorld, EventAccumulator eventAccumulator, Action<EntityRepository>? schemaSetup = null)
+        // Constructor with Mask
+        public DoubleBufferProvider(
+            EntityRepository liveWorld, 
+            EventAccumulator eventAccumulator, 
+            BitMask256 mask,
+            Action<EntityRepository>? schemaSetup = null)
         {
             _liveWorld = liveWorld ?? throw new ArgumentNullException(nameof(liveWorld));
             _eventAccumulator = eventAccumulator ?? throw new ArgumentNullException(nameof(eventAccumulator));
+            _mask = mask;
             
             // Create persistent replica
             _replica = new EntityRepository();
             schemaSetup?.Invoke(_replica);
+        }
+
+        // Backward compatible constructor (Full Sync)
+        public DoubleBufferProvider(
+            EntityRepository liveWorld, 
+            EventAccumulator eventAccumulator, 
+            Action<EntityRepository>? schemaSetup = null)
+        {
+            _liveWorld = liveWorld ?? throw new ArgumentNullException(nameof(liveWorld));
+            _eventAccumulator = eventAccumulator ?? throw new ArgumentNullException(nameof(eventAccumulator));
+            _mask = null; // Implies Full Sync
             
-            // TODO: Register all component types that live world has
-            // This ensures replica has matching schema
-            // For now, assume schema is set up externally or via explicit registration in tests
+            _replica = new EntityRepository();
+            schemaSetup?.Invoke(_replica);
         }
         
         public SnapshotProviderType ProviderType => SnapshotProviderType.GDB;
@@ -39,8 +55,15 @@ namespace ModuleHost.Core.Providers
         /// </summary>
         public void Update()
         {
-            // Full sync (no mask - GDB copies everything)
-            _replica.SyncFrom(_liveWorld);
+            if (_mask.HasValue)
+            {
+                _replica.SyncFrom(_liveWorld, _mask.Value);
+            }
+            else
+            {
+                // Full sync (no mask - GDB copies everything)
+                _replica.SyncFrom(_liveWorld);
+            }
             
             // Flush event history
             // We flush events that happened since the last sync
@@ -67,7 +90,6 @@ namespace ModuleHost.Core.Providers
         public void ReleaseView(ISimulationView view)
         {
             // GDB: No-op (replica is persistent, not pooled)
-            // We could validate that view == _replica, but skip for performance
         }
         
         public void Dispose()

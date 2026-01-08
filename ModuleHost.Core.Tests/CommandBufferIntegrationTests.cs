@@ -15,9 +15,15 @@ namespace ModuleHost.Core.Tests
         private class CommandModule : IModule
         {
             public string Name => "CommandModule";
-            public ModuleTier Tier => ModuleTier.Fast; // Run every frame
+            
+            // We must override Policy to ensure 1000ms timeout is used.
+            // Tier => Fast defaults to 15ms timeout otherwise.
+            public ExecutionPolicy Policy => ExecutionPolicy.FastReplica().WithTimeout(1000);
+
+            // Legacy properties (unused by Policy now)
+            public ModuleTier Tier => ModuleTier.Fast; 
             public int UpdateFrequency => 1;
-            public int MaxExpectedRuntimeMs => 1000;
+            
             public bool DidRun { get; private set; }
             public Action<ISimulationView, IEntityCommandBuffer>? OnTick;
 

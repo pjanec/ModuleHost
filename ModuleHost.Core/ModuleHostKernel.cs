@@ -94,13 +94,33 @@ namespace ModuleHost.Core
 
         private void AutoAssignProviders()
         {
-            // Group modules by execution characteristics
-            var groups = _modules
-                .Where(m => m.Provider == null) // Only auto-assign if not manually set
-                .GroupBy(m => new 
-                { 
-                    Tier = m.Module.Tier,
-                    Frequency = m.Module.UpdateFrequency
+            // Modules can manually set provider; only auto-assign if null
+            var modulesNeedingProvider = _modules.Where(m => m.Provider == null).ToList();
+            
+            if (modulesNeedingProvider.Count == 0)
+                return;
+            
+            // Validate policies first
+            foreach (var entry in modulesNeedingProvider)
+            {
+                try
+                {
+                    entry.Module.Policy.Validate();
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        $"Module '{entry.Module.Name}' has invalid execution policy: {ex.Message}", ex);
+                }
+            }
+            
+            // Group by execution characteristics
+            var groups = modulesNeedingProvider
+                .GroupBy(m => new
+                {
+                    m.Module.Policy.Mode,
+                    m.Module.Policy.Strategy,
+                    Frequency = m.Module.Policy.TargetFrequencyHz
                 });
             
             foreach (var group in groups)
@@ -108,75 +128,103 @@ namespace ModuleHost.Core
                 var key = group.Key;
                 var moduleList = group.ToList();
                 
-                if (key.Tier == ModuleTier.Fast)
+                switch (key.Strategy)
                 {
-                    // Fast tier: GDB (DoubleBufferProvider)
-                    // All fast modules can share one GDB
-                    var gdbProvider = new DoubleBufferProvider(
-                        _liveWorld, 
-                        _eventAccumulator, 
-                        _schemaSetup
-                    );
-                    
-                    foreach (var entry in moduleList)
-                    {
-                        entry.Provider = gdbProvider;
-                    }
-                }
-                else // Slow tier
-                {
-                    if (moduleList.Count == 1)
-                    {
-                        // Single module: OnDemandProvider
-                        var entry = moduleList[0];
-                        var mask = GetComponentMask(entry.Module);
-                        
-                        entry.Provider = new OnDemandProvider(
-                            _liveWorld,
-                            _eventAccumulator,
-                            mask,
-                            _schemaSetup,
-                            initialPoolSize: 5
-                        );
-                    }
-                    else
-                    {
-                        // CONVOY: Multiple modules at same frequency
-                        // Calculate union mask
-                        var unionMask = new BitMask256();
+                    case DataStrategy.Direct:
+                        // No provider needed - direct world access
+                        // (modules run on main thread)
                         foreach (var entry in moduleList)
                         {
-                            var mask = GetComponentMask(entry.Module);
-                            unionMask.BitwiseOr(mask);
+                            entry.Provider = null!; // Explicit null (handled in Update? Direct modules usually don't need provider lookup)
+                            // NOTE: Direct modules don't use AcquireView/ReleaseView, they run synchronously.
+                            // But Update loop iterates _modules to call Provider.Update().
+                            // Direct modules should have NO provider assigned.
+                            // However, RegisterModule assigns provider=null.
+                            // We should handle Provider == null in Update logic if needed.
+                            // Currently Update calls entry.Provider.Update() for all modules.
+                            // If Provider is null, it crashes.
+                            // So Direct modules either need a "NullProvider" or we check null.
+                            // Task 5.3 says "Direct strategy: no provider assigned".
+                            // I will check Update() method.
                         }
+                        break;
+                    
+                    case DataStrategy.GDB:
+                        // All modules in group share ONE persistent replica
+                        var unionMask = CalculateUnionMask(moduleList);
                         
-                        // Create shared provider
-                        var sharedProvider = new SharedSnapshotProvider(
+                        var gdbProvider = new DoubleBufferProvider(
                             _liveWorld,
                             _eventAccumulator,
                             unionMask,
-                            _snapshotPool!
+                            _schemaSetup
                         );
                         
-                        // Assign to all modules in convoy
                         foreach (var entry in moduleList)
                         {
-                            entry.Provider = sharedProvider;
+                            entry.Provider = gdbProvider;
                         }
-                    }
+                        break;
+                    
+                    case DataStrategy.SoD:
+                        if (moduleList.Count == 1)
+                        {
+                            // Single module: OnDemandProvider
+                            var entry = moduleList[0];
+                            var mask = GetComponentMask(entry.Module);
+                            
+                            entry.Provider = new OnDemandProvider(
+                                _liveWorld,
+                                _eventAccumulator,
+                                mask,
+                                _schemaSetup,
+                                initialPoolSize: 5
+                            );
+                        }
+                        else
+                        {
+                            // Convoy: SharedSnapshotProvider
+                            var unionMaskSoD = CalculateUnionMask(moduleList);
+                            
+                            var sharedProvider = new SharedSnapshotProvider(
+                                _liveWorld,
+                                _eventAccumulator,
+                                unionMaskSoD,
+                                _snapshotPool!
+                            );
+                            
+                            foreach (var entry in moduleList)
+                            {
+                                entry.Provider = sharedProvider;
+                            }
+                        }
+                        break;
                 }
             }
             
-            // Final check: Ensure all modules have providers
+            // Final check: Ensure all non-Direct modules have providers
             foreach (var entry in _modules)
             {
-                if (entry.Provider == null)
+                if (entry.Provider == null && entry.Module.Policy.Strategy != DataStrategy.Direct)
                 {
                     // Fallback (should not happen if logic covers all cases)
                      var mask = GetComponentMask(entry.Module);
                      entry.Provider = new OnDemandProvider(_liveWorld, _eventAccumulator, mask, _schemaSetup);
                 }
             }
+        }
+
+        private BitMask256 CalculateUnionMask(List<ModuleEntry> modules)
+        {
+            var unionMask = new BitMask256();
+            
+            foreach (var entry in modules)
+            {
+                var moduleMask = GetComponentMask(entry.Module);
+                unionMask.BitwiseOr(moduleMask);
+            }
+            
+            return unionMask;
         }
 
         private BitMask256 GetComponentMask(IModule module)
@@ -200,20 +248,28 @@ namespace ModuleHost.Core
             if (_initialized)
                 throw new InvalidOperationException("Cannot register modules after initialization");
             
+            var policy = module.Policy;
+            
+            // Validate locally to ensure defaults (like FailureThreshold) are set.
+            // We suppress exceptions here because specific validation errors (like Mode mismatches)
+            // should be handled during Initialize() phase or AutoAssignProviders(), 
+            // consistent with previous behavior.
+            try { policy.Validate(); } catch { }
+
             var entry = new ModuleEntry
             {
                 Module = module,
-                Provider = provider!, // Can be null initially, assigned in Initialize
+                Provider = provider!, 
                 FramesSinceLastRun = 0,
                 
-                // Initialize resilience components
-                MaxExpectedRuntimeMs = module.MaxExpectedRuntimeMs,
-                FailureThreshold = module.FailureThreshold,
-                CircuitResetTimeoutMs = module.CircuitResetTimeoutMs,
+                // Initialize resilience components from locally validated Policy
+                MaxExpectedRuntimeMs = policy.MaxExpectedRuntimeMs,
+                FailureThreshold = policy.FailureThreshold,
+                CircuitResetTimeoutMs = policy.CircuitResetTimeoutMs,
                 
                 CircuitBreaker = new ModuleCircuitBreaker(
-                    failureThreshold: module.FailureThreshold,
-                    resetTimeoutMs: module.CircuitResetTimeoutMs
+                    failureThreshold: policy.FailureThreshold,
+                    resetTimeoutMs: policy.CircuitResetTimeoutMs
                 )
             };
             
@@ -264,7 +320,8 @@ namespace ModuleHost.Core
             // Update Sync-Point Providers
             foreach (var entry in _modules)
             {
-                entry.Provider.Update();
+                // Only update provider if it exists (Direct strategy has null)
+                entry.Provider?.Update();
             }
             
             // ═══════════ HARVEST PHASE ═══════════
@@ -294,8 +351,24 @@ namespace ModuleHost.Core
                 // If idle, check frequency
                 if (ShouldRunThisFrame(entry))
                 {
-                    // Acquire view
-                    var view = entry.Provider.AcquireView();
+                    ISimulationView view;
+                    
+                    if (entry.Module.Policy.Strategy == DataStrategy.Direct)
+                    {
+                        // Direct access to live world (Synchronous only)
+                        view = _liveWorld;
+                    }
+                    else
+                    {
+                        if (entry.Provider == null)
+                        {
+                            // Should theoretically not happen if Validate() worked, but safe guard
+                             continue;
+                        }
+                        // Acquire view from provider
+                        view = entry.Provider.AcquireView();
+                    }
+                    
                     entry.LeasedView = view;
                     entry.LastView = view; // Keep for reference if needed
                     
@@ -303,16 +376,43 @@ namespace ModuleHost.Core
                     float moduleDelta = entry.AccumulatedDeltaTime;
                     entry.AccumulatedDeltaTime = 0f;
                     
-                    // Dispatch safe execution
-                    entry.CurrentTask = ExecuteModuleSafe(entry, view, moduleDelta);
+                    // Dispatch execution
+                    if (entry.Module.Policy.Mode == RunMode.Synchronous)
+                    {
+                        // Synchronous run (main thread)
+                        try
+                        {
+                            entry.Module.Tick(view, moduleDelta);
+                            System.Threading.Interlocked.Increment(ref entry.ExecutionCount);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[ModuleHost] Sync Module '{entry.Module.Name}' exception: {ex}");
+                        }
+                        
+                        // Release view (no-op for Direct, but valid for completeness)
+                        // Actually Direct view is _liveWorld which doesn't need release.
+                        if (entry.Module.Policy.Strategy != DataStrategy.Direct)
+                        {
+                            entry.Provider?.ReleaseView(view);
+                        }
+                        entry.LeasedView = null;
+                        entry.CurrentTask = null; // No task
+                    }
+                    else
+                    {
+                        // Safe Execution (Async/FrameSynced)
+                        entry.CurrentTask = ExecuteModuleSafe(entry, view, moduleDelta);
+                    }
                     
                     entry.FramesSinceLastRun = 0;
-                    entry.LastRunTick = _liveWorld.GlobalVersion > 0 ? _liveWorld.GlobalVersion - 1 : 0; // Track version we started processing (Version-1 to catch inclusive)
+                    entry.LastRunTick = _liveWorld.GlobalVersion > 0 ? _liveWorld.GlobalVersion - 1 : 0; 
                     
                     // Check Policy: If FrameSynced, we must wait
-                    if (entry.Module.Policy.Mode == ModuleMode.FrameSynced)
+                    if (entry.Module.Policy.Mode == RunMode.FrameSynced)
                     {
-                        tasksToWait.Add(entry.CurrentTask);
+                        if (entry.CurrentTask != null)
+                             tasksToWait.Add(entry.CurrentTask);
                     }
                 }
                 else
@@ -329,7 +429,7 @@ namespace ModuleHost.Core
                 // Harvest immediately
                 foreach (var entry in _modules)
                 {
-                    if (entry.CurrentTask != null && entry.Module.Policy.Mode == ModuleMode.FrameSynced)
+                    if (entry.CurrentTask != null && entry.Module.Policy.Mode == RunMode.FrameSynced)
                     {
                         HarvestEntry(entry);
                     }
@@ -355,6 +455,14 @@ namespace ModuleHost.Core
             if (entry.CircuitBreaker != null && !entry.CircuitBreaker.CanRun())
             {
                 // Circuit is open - skip execution
+                // We must release the view!
+                // NOTE: If we return here, HarvestEntry won't be called because CurrentTask terminates early?
+                // Actually if ExecuteModuleSafe returns Task, and we await it.
+                // But if we return here 'early', the task completes.
+                // HarvestEntry checks 'IsCompleted'.
+                // AND HarvestEntry releases view.
+                // So returning here is Safe IF we ensure HarvestEntry runs.
+                // HarvestEntry runs in Update() loop.
                 return;
             }
             
@@ -451,7 +559,7 @@ namespace ModuleHost.Core
             // 2. Release view
             if (entry.LeasedView != null)
             {
-                entry.Provider.ReleaseView(entry.LeasedView);
+                entry.Provider?.ReleaseView(entry.LeasedView); // Null check just in case
                 entry.LeasedView = null;
             }
             
@@ -478,16 +586,6 @@ namespace ModuleHost.Core
                     FailureCount = entry.CircuitBreaker?.FailureCount ?? 0
                 });
                 
-                // Note: We don't reset ExecutionCount here anymore for better observability, or we should?
-                // The original code did: entry.ExecutionCount = 0;
-                // If we don't reset, it accumulates. If we reset, it's per-call.
-                // Usually GetStats implies current snapshot.
-                // But for tests checking "did it run this frame", rest is helpful.
-                // However, ExecutionCount is now interlocked incremented.
-                // Let's keep reset for compatibility with test expectations ("Did it run in this update?").
-                // BUT "GetExecutionStats" usually shouldn't side-effect reset numbers.
-                // Use a separate "ResetStats"? Or assume usage pattern.
-                // The original implementation reset it. I will keep resetting it to avoid breaking tests logic that assumes per-frame stats.
                 entry.ExecutionCount = 0;
             }
             return stats;
@@ -497,31 +595,45 @@ namespace ModuleHost.Core
         {
             var policy = entry.Module.Policy;
             
-            // Check Trigger Policy
-            switch (policy.Trigger)
+            // 1. Reactive Check (Batch-02)
+            bool triggered = false;
+            
+            if (entry.Module.WatchEvents != null && entry.Module.WatchEvents.Count > 0)
             {
-                case TriggerType.Always:
-                    // Legacy behavior + Frequency throttling
-                    if (entry.Module.Tier == ModuleTier.Fast) return true;
-                    // For Slow/Async, default to running if frequency allows (Frame-based throttling)
-                    int frequency = Math.Max(1, entry.Module.UpdateFrequency);
-                    return (entry.FramesSinceLastRun + 1) >= frequency;
-
-                case TriggerType.Interval:
-                    // Time-based throttling (IntervalMs)
-                    return entry.AccumulatedDeltaTime >= (policy.IntervalMs / 1000f);
-
-                case TriggerType.OnEvent:
-                    if (policy.TriggerArg == null) return false;
-                    return _liveWorld.Bus.HasEvent(policy.TriggerArg);
-
-                case TriggerType.OnComponentChange:
-                    if (policy.TriggerArg == null) return false;
-                    return _liveWorld.HasComponentChanged(policy.TriggerArg, entry.LastRunTick);
-
-                default:
-                    return false;
+                foreach (var evt in entry.Module.WatchEvents)
+                {
+                    if (_liveWorld.Bus.HasEvent(evt))
+                    {
+                        triggered = true;
+                        break;
+                    }
+                }
             }
+            
+            if (!triggered && entry.Module.WatchComponents != null && entry.Module.WatchComponents.Count > 0)
+            {
+                foreach (var comp in entry.Module.WatchComponents)
+                {
+                     if (_liveWorld.HasComponentChanged(comp, entry.LastRunTick))
+                     {
+                         triggered = true;
+                         break;
+                     }
+                }
+            }
+            
+            if (triggered) return true;
+            
+            // 2. Periodic Check
+            int targetHz = policy.TargetFrequencyHz;
+            if (targetHz <= 0) targetHz = 60; // 0 means every frame
+            
+            if (targetHz >= 60) return true;
+            
+            int framesToSkip = 60 / targetHz;
+            if (framesToSkip < 1) framesToSkip = 1;
+            
+            return (entry.FramesSinceLastRun + 1) >= framesToSkip;
         }
         
         private Action<EntityRepository>? _schemaSetup;
