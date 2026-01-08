@@ -19,6 +19,27 @@ namespace ModuleHost.Core.Tests
             public void Tick(ISimulationView view, float deltaTime) { }
         }
 
+        class MockAsyncModule : IModule
+        {
+            public string Name => "MockAsyncModule";
+            public ModuleTier Tier => ModuleTier.Slow;
+            public int UpdateFrequency => 1;
+            public ModuleExecutionPolicy Policy { get; set; } = ModuleExecutionPolicy.DefaultSlow;
+            public TimeSpan TaskDuration { get; set; }
+            public int RunCount { get; private set; }
+            
+            public void RegisterSystems(ISystemRegistry registry) { }
+            
+            public void Tick(ISimulationView view, float deltaTime)
+            {
+                RunCount++;
+                if (TaskDuration > TimeSpan.Zero)
+                {
+                    System.Threading.Thread.Sleep(TaskDuration);
+                }
+            }
+        }
+
         [EventId(2001)]
         struct TestEvent { public int X; }
 
@@ -111,6 +132,46 @@ namespace ModuleHost.Core.Tests
             // 3. No change next frame
             kernel.Update(0.1f);
             Assert.Equal(0, kernel.GetExecutionStats()["MockModule"]);
+        }
+
+        [Fact]
+        public async Task ReactiveScheduling_AsyncModule_TracksVersionCorrectly()
+        {
+            using var repo = new EntityRepository();
+            repo.RegisterComponent<TestComponent>();
+            var accumulator = new EventAccumulator();
+            using var kernel = new ModuleHostKernel(repo, accumulator);
+
+            var asyncModule = new MockAsyncModule 
+            { 
+                Policy = ModuleExecutionPolicy.OnComponentChange<TestComponent>(ModuleMode.Async),
+                TaskDuration = TimeSpan.FromMilliseconds(50) // Takes ~3 frames at 16ms
+            };
+            
+            kernel.RegisterModule(asyncModule);
+            kernel.Initialize();
+            
+            // Frame 1: Trigger module
+            var e = repo.CreateEntity();
+            repo.SetComponent(e, new TestComponent { X = 1 });
+            kernel.Update(0.016f);
+            
+            // Frame 2: Module still running, NEW change happens
+            repo.SetComponent(e, new TestComponent { X = 2 });
+            kernel.Update(0.016f);
+            
+            // Frame 3: Module still running (total 32ms < 50ms)
+            // Wait a bit to ensure task completes eventually
+            await Task.Delay(100);
+            kernel.Update(0.016f); // Harvest
+            
+            // Frame 4: Should re-trigger because change happened WHILE running in Frame 2
+            kernel.Update(0.016f);
+            
+            // Wait for 2nd run to finish (it starts async)
+            await Task.Delay(100);
+            
+            Assert.Equal(2, asyncModule.RunCount); // Ran twice
         }
     }
 }

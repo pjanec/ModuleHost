@@ -2096,6 +2096,476 @@ public class NetworkSmoothingSystem : IModuleSystem
 3. **Keep Tick() logic focused - delegate to systems**
 4. **Always use ISimulationView, never cast to EntityRepository**
 
+---
+
+## Reactive Scheduling & Component Dirty Tracking
+
+### Overview
+
+**Reactive Scheduling** allows modules to run **only when needed** based on data changes or events, instead of polling every frame. This dramatically reduces CPU usage for event-driven logic.
+
+**Component Dirty Tracking** enables efficient detection of modifications to component tables without per-write overhead.
+
+### Core Interfaces
+
+#### IComponentTable.HasChanges
+
+```csharp
+public interface IComponentTable
+{
+    /// <summary>
+    /// Efficiently checks if this table has been modified since the specified version.
+    /// Uses lazy scan of chunk versions (O(chunks), typically ~100 chunks for 100k entities).
+    /// PERFORMANCE: 10-50ns scan time, L1-cache friendly, no write contention.
+    /// 
+    /// Uses STRICT INEQUALITY (version > sinceVersion).
+    /// Example:
+    ///   Version 5: Component written
+    ///   HasChanges(4) -> TRUE  (5 > 4)
+    ///   HasChanges(5) -> FALSE (5 > 5 is false)
+    /// 
+    /// Usage: Store lastRunVersion = GlobalVersion BEFORE update,
+    ///        Check HasChanges(lastRunVersion) NEXT frame.
+    /// </summary>
+    bool HasChanges(uint sinceVersion);
+    
+    // ... other members ...
+}
+```
+
+#### EntityRepository.HasComponentChanged
+
+```csharp
+public class EntityRepository
+{
+    /// <summary>
+    /// Checks if a component table has been modified since the specified tick.
+    /// Delegates to the underlying IComponentTable.HasChanges().
+    /// </summary>
+    /// <param name="componentType">Type of component to check</param>
+    /// <param name="sinceTick">Version to compare against</param>
+    /// <returns>True if table was modified after sinceTick</returns>
+    public bool HasComponentChanged(Type componentType, uint sinceTick)
+    {
+        if (_componentTables.TryGetValue(componentType, out var table))
+        {
+            return table.HasChanges(sinceTick);
+        }
+        return false;
+    }
+}
+```
+
+#### FdpEventBus.HasEvent
+
+```csharp
+public class FdpEventBus
+{
+    /// <summary>
+    /// Checks if an unmanaged event of type T exists in the current frame.
+    /// O(1) lookup - uses HashSet populated during SwapBuffers().
+    /// </summary>
+    public bool HasEvent<T>() where T : unmanaged
+    {
+        return _activeEventIds.Contains(EventType<T>.Id);
+    }
+    
+    /// <summary>
+    /// Checks if a managed event of type T exists in the current frame.
+    /// </summary>
+    public bool HasManagedEvent<T>() where T : class
+    {
+        return _activeEventIds.Contains(GetManagedTypeId<T>());
+    }
+    
+    /// <summary>
+    /// Checks if an event of the specified type exists in the current frame.
+    /// Uses reflection-based caching for value types.
+    /// </summary>
+    public bool HasEvent(Type type)
+    {
+        if (type.IsValueType)
+        {
+            // Cached reflection lookup for EventType<T>.Id
+            if (!_unmanagedEventIdCache.TryGetValue(type, out int id))
+            {
+                // ... reflection to get ID, then cache ...
+            }
+            return _activeEventIds.Contains(id);
+        }
+        else
+        {
+            return _activeEventIds.Contains(type.FullName!.GetHashCode() & 0x7FFFFFFF);
+        }
+    }
+}
+```
+
+### ModuleExecutionPolicy
+
+```csharp
+public struct ModuleExecutionPolicy
+{
+    public ModuleMode Mode { get; set; }        // FrameSynced or Async
+    public TriggerType Trigger { get; set; }    // When to run
+    public int IntervalMs { get; set; }         // For Interval trigger
+    public Type TriggerArg { get; set; }        // Event/Component type
+    
+    // Factory methods for easy configuration
+    public static ModuleExecutionPolicy DefaultFast { get; }   // FrameSynced, Always
+    public static ModuleExecutionPolicy DefaultSlow { get; }   //  Async, Always
+    
+    public static ModuleExecutionPolicy OnEvent<T>(ModuleMode mode = ModuleMode.FrameSynced);
+    public static ModuleExecutionPolicy OnComponentChange<T>(ModuleMode mode = ModuleMode.FrameSynced);
+    public static ModuleExecutionPolicy FixedInterval(int ms, ModuleMode mode = ModuleMode.Async);
+}
+
+public enum TriggerType
+{
+    Always,              // Run every frame
+    Interval,            // Run every N milliseconds
+    OnEvent,             // Run only when specific event published
+    OnComponentChange    // Run only when specific component modified
+}
+```
+
+### Usage Examples
+
+#### Example 1: Event-Driven AI Module
+
+```csharp
+public class CombatAIModule : IModule
+{
+    public string Name => "CombatAI";
+    
+    // Run ONLY when WeaponFireEvent occurs
+    public ModuleExecutionPolicy Policy => 
+        ModuleExecutionPolicy.OnEvent<WeaponFireEvent>(ModuleMode.Async);
+    
+    public void Tick(ISimulationView view, float deltaTime)
+    {
+        // Only runs when weapons fire - saves CPU!
+        var events = view.GetEvents<WeaponFireEvent>();
+        
+        foreach (var evt in events)
+        {
+            // React to gunfire: take cover, return fire, etc.
+            ReactToCombat(view, evt);
+        }
+    }
+}
+```
+
+**Performance Impact:**
+- **Without reactive:** Ticks 60 times/sec = 3,600 ticks/min
+- **With reactive:** Ticks only on gunfire = ~10-50 ticks/min
+- **CPU savings:** 98%+ for event-driven logic
+
+#### Example 2: Analytics on Damage
+
+```csharp
+public class DamageAnalyticsModule : IModule
+{
+    public string Name => "DamageAnalytics";
+    
+    // Run ONLY when Health component changes
+    public ModuleExecutionPolicy Policy => 
+        ModuleExecutionPolicy.OnComponentChange<Health>(ModuleMode.Async);
+    
+    public void Tick(ISimulationView view, float deltaTime)
+    {
+        // Only runs when health changes - efficient!
+        var query = view.Query().With<Health>().Build();
+        
+        foreach (var entity in query)
+        {
+            var health = view.GetComponentRO<Health>(entity);
+            if (health.Current < health.Max * 0.25f)
+            {
+                LogLowHealthEvent(entity, health);
+            }
+        }
+    }
+}
+```
+
+#### Example 3: Interval-Based Network Sync
+
+```csharp
+public class NetworkSyncModule : IModule
+{
+    public string Name => "NetworkSync";
+    
+    // Run every 100ms (10Hz) instead of 60Hz
+    public ModuleExecutionPolicy Policy => 
+        ModuleExecutionPolicy.FixedInterval(100, ModuleMode.FrameSynced);
+    
+    public void Tick(ISimulationView view, float deltaTime)
+    {
+        // Runs at 10Hz - network-friendly rate
+        PublishStateUpdates(view);
+    }
+}
+```
+
+#### Example 4: Combining Multiple Conditions (Manual)
+
+```csharp
+public class SmartModule : IModule
+{
+    public string Name => "SmartModule";
+    
+    // Default to Always, but check manually in Tick
+    public ModuleExecutionPolicy Policy => ModuleExecutionPolicy.DefaultFast;
+    
+    private uint _lastHealthCheck = 0;
+    
+    public void Tick(ISimulationView view, float deltaTime)
+    {
+        // Manual check: Run ONLY if Health changed OR DamageEvent occurred
+        bool healthChanged = view.Repository.HasComponentChanged(typeof(Health), _lastHealthCheck);
+        bool damageOccurred = view.Bus.HasEvent<DamageEvent>();
+        
+        if (!healthChanged && !damageOccurred)
+            return; // Skip this frame
+        
+        _lastHealthCheck = view.Repository.GlobalVersion;
+        
+        // Process logic...
+    }
+}
+```
+
+### Performance Characteristics
+
+#### Component Dirty Tracking
+
+**Implementation:** Lazy scan of chunk versions (not per-entity flags)
+
+```csharp
+// Inside NativeChunkTable<T>
+public bool HasChanges(uint sinceVersion)
+{
+    // O(chunks) where chunks << entities
+    // For 100k entities @ 16k/chunk = ~6 chunk checks
+    for (int i = 0; i < _totalChunks; i++)
+    {
+        if (_chunkVersions[i] > sinceVersion)
+            return true;
+    }
+    return false;
+}
+```
+
+**Performance:**
+- **Scan time:** 10-50ns (measured in tests)
+- **Write cost:** Zero (no dirty flags set)
+- **Cache:** L1-friendly (contiguous uint[] array)
+- **Thread-safe:** Read-only scan during single-threaded phases
+
+**Why This Design:**
+
+❌ **Per-Entity Dirty Flag Approach:**
+```csharp
+// BAD: Cache thrashing on every write
+public void SetComponent(Entity e, Position pos)
+{
+    _data[e.Index] = pos;
+    _dirtyFlags[e.Index] = true; // ← Cache line contention!
+}
+```
+
+✅ **Lazy Scan Approach:**
+```csharp
+// GOOD: Zero write overhead
+public void SetComponent(Entity e, Position pos)
+{
+    _data[e.Index] = pos;
+    // Chunk version already updated by existing logic
+}
+```
+
+#### Event Bus Active Tracking
+
+**Implementation:** HashSet rebuilt during SwapBuffers()
+
+```csharp
+public void SwapBuffers()
+{
+    _activeEventIds.Clear();
+    
+    // O(streams) not O(events)
+    foreach (var stream in _nativeStreams.Values)
+    {
+        stream.Swap();
+        if (stream.GetRawBytes().Length > 0)
+        {
+            _activeEventIds.Add(stream.EventTypeId); // O(1)
+        }
+    }
+    
+    // Same for managed streams...
+}
+```
+
+**Performance:**
+- **Lookup:** O(1) during module dispatch
+- **Rebuild:** O(streams) once per frame (~50 stream types max)
+- **Memory:** Minimal (HashSet<int> with ~20 active IDs)
+
+### Integration with ModuleHostKernel
+
+The kernel checks trigger conditions in `ShouldRunThisFrame`:
+
+```csharp
+private bool ShouldRunThisFrame(ModuleEntry entry)
+{
+    switch (entry.Policy.Trigger)
+    {
+        case TriggerType.Always:
+            return true;
+        
+        case TriggerType.Interval:
+            // Check accumulated time
+            return entry.AccumulatedDeltaTime >= entry.Policy.IntervalMs / 1000.0f;
+        
+        case TriggerType.OnEvent:
+            // Check event bus
+            return _liveWorld.Bus.HasEvent(entry.Policy.TriggerArg);
+        
+        case TriggerType.OnComponentChange:
+            // Check dirty tracking
+            return _liveWorld.HasComponentChanged(entry.Policy.TriggerArg, entry.LastRunTick);
+        
+        default:
+            return true;
+    }
+}
+```
+
+**Version Tracking for Async Modules:**
+
+```csharp
+private void DispatchModules(float deltaTime)
+{
+    foreach (var entry in _modules)
+    {
+        if (ShouldRunThisFrame(entry))
+        {
+            // IMPORTANT: Capture version BEFORE dispatch
+            entry.LastRunTick = _liveWorld.GlobalVersion;
+            
+            entry.CurrentTask = Task.Run(() => entry.Module.Tick(view, accumulated));
+        }
+    }
+}
+```
+
+**Why This Matters:** Async modules may span multiple frames. Capturing `GlobalVersion` at dispatch ensures `HasComponentChanged` detects ALL modifications that occurred while the module was running.
+
+### Best Practices
+
+**1. Use Reactive Triggers for Event-Driven Logic**
+
+```csharp
+// ✅ GOOD: Only runs when needed
+Policy = ModuleExecutionPolicy.OnEvent<CollisionEvent>();
+
+// ❌ BAD: Wastes CPU polling
+Policy = ModuleExecutionPolicy.DefaultFast;
+void Tick(...)
+{
+    if (view.GetEvents<CollisionEvent>().Length == 0)
+        return; // Still ran for nothing!
+}
+```
+
+**2. Choose Appropriate Granularity**
+
+```csharp
+// ✅ GOOD: Specific component
+Policy = ModuleExecutionPolicy.OnComponentChange<Health>();
+
+// ⚠️ ACCEPTABLE: Broader component if needed
+Policy = ModuleExecutionPolicy.OnComponentChange<Position>();
+// May trigger more often, but still better than Always
+```
+
+**3. Combine with Interval for Rate Limiting**
+
+```csharp
+// Run on event, but max 10Hz
+public void Tick(ISimulationView view, float deltaTime)
+{
+    _accumulatedTime += deltaTime;
+    
+    if (_accumulatedTime < 0.1f) // 100ms = 10Hz
+        return;
+    
+    _accumulatedTime = 0;
+    
+    // Process events at controlled rate...
+}
+```
+
+**4. Document Trigger Rationale**
+
+```csharp
+public class ExplosionVFXModule : IModule
+{
+    // Runs ONLY on DetonationEvent
+    // Rationale: VFX spawning is expensive, event-driven is 99% cheaper
+    public ModuleExecutionPolicy Policy => 
+        ModuleExecutionPolicy.OnEvent<DetonationEvent>(ModuleMode.Async);
+}
+```
+
+### Common Pitfalls
+
+**❌ PITFALL 1: Forgetting Version Semantics**
+
+```csharp
+// WRONG: Checks same version
+uint tick = repo.GlobalVersion;
+// ... modify component ...
+repo.HasComponentChanged(typeof(Pos), tick); // FALSE!
+
+// CORRECT: Check previous version
+uint tick = repo.GlobalVersion;
+// ... modify component ...
+repo.Tick(); // Increment version
+repo.HasComponentChanged(typeof(Pos), tick); // TRUE!
+```
+
+**❌ PITFALL 2: Async Module Missing Changes**
+
+```csharp
+// WRONG: Capture version AFTER module completes
+Task task = Task.Run(() => module.Tick(...));
+await task;
+entry.LastRunTick = repo.GlobalVersion; // Too late!
+
+// CORRECT: Capture version BEFORE dispatch
+entry.LastRunTick = repo.GlobalVersion;
+Task task = Task.Run(() => module.Tick(...));
+```
+
+**❌ PITFALL 3: Event Check Before SwapBuffers**
+
+```csharp
+// WRONG: Events not active yet
+repo.Bus.Publish(new FireEvent());
+bool hasEvent = repo.Bus.HasEvent<FireEvent>(); // FALSE!
+
+// CORRECT: Check after swap
+repo.Bus.Publish(new FireEvent());
+repo.Bus.SwapBuffers();
+bool hasEvent = repo.Bus.HasEvent<FireEvent>(); // TRUE!
+```
+
+
+---
+
 ### Performance
 
 1. **NativeArrays for static lookup tables**

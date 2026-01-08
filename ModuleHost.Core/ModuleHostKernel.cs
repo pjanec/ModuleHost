@@ -202,7 +202,7 @@ namespace ModuleHost.Core
                     
                     entry.CurrentTask = task;
                     entry.FramesSinceLastRun = 0;
-                    entry.LastRunTick = _liveWorld.GlobalVersion; // Track version we started processing
+                    entry.LastRunTick = _liveWorld.GlobalVersion > 0 ? _liveWorld.GlobalVersion - 1 : 0; // Track version we started processing (Version-1 to catch inclusive)
                     
                     // Check Policy: If FrameSynced, we must wait
                     if (entry.Module.Policy.Mode == ModuleMode.FrameSynced)
