@@ -8278,6 +8278,636 @@ if (_frameCount % 2 == 0)
 
 ---
 
+
+---
+
+## Network Integration
+
+### Overview
+
+**Network Integration** in FDP-ModuleHost enables **distributed simulations** where multiple nodes collaborate to simulate a shared world. This section consolidates all network-related concepts and provides an integration guide.
+
+**What Network Integration Provides:**
+- **Entity Synchronization:** Share entities across network nodes via DDS
+- **Partial Ownership:** Different nodes control different aspects of same entity
+- **Lifecycle Coordination:** Dark construction and coordinated teardown across network
+- **Geographic Transforms:** Network messages in geodetic coordinates, local sim in Cartesian
+- **Fault Tolerance:** Node crashes handled gracefully with ownership recovery
+
+**Architecture:**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Local Node (FDP Simulation)                                 │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│  EntityRepository (Live World)                               │
+│  ├─ Entity: Tank #42                                         │
+│  │  ├─ LocalPosition {X,Y,Z}              (Local)           │
+│  │  ├─ PositionGeodetic {Lat,Lon,Alt}     (Network)         │
+│  │  ├─ EntityState {Velocity, Heading}    (Owned, Published)│
+│  │  └─ WeaponState {Aim, Ammo}            (Remote, Received)│
+│  │                                                           │
+│  └─ Modules:                                                 │
+│     ├─ EntityLifecycleModule  (Coordinates construction)     │
+│     ├─ GeographicTransformModule (Local ↔ Geodetic)          │
+│     └─ NetworkGatewayModule   (DDS Pub/Sub)                 │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+                          ↕ DDS Network
+┌──────────────────────────────────────────────────────────────┐
+│ Remote Node (FDP Simulation)                                │
+│  ├─ Tank #42 (Replica)                                       │
+│  │  ├─ EntityState (Received, Remote-owned)                  │
+│  │  └─ WeaponState (Owned locally, Published)                │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Key Concepts:**
+- **Descriptors:** Network data structures (SST format, rich schemas)
+- **Components:** ECS data (FDP format, atomic, cache-friendly)
+- **Ownership:** Who publishes which descriptors
+- **Translators:** Bridge between descriptors and components
+- **Lifecycle:** Coordinated entity creation/destruction
+
+---
+
+### Core Integration Points
+
+#### 1. Entity Lifecycle Management (ELM)
+
+**Purpose:** Coordinate entity creation and destruction across distributed nodes.
+
+**Dark Construction Pattern:**
+```csharp
+// Node 1: Create new tank entity
+var tank = _repository.CreateEntity();
+
+// Set lifecycle: Constructing (invisible to other systems)
+_lifecycleModule.SetLifecycleState(tank, EntityLifecycle.Constructing);
+
+// Initialize components
+_repository.AddComponent(tank, new Position { ... });
+_repository.AddComponent(tank, new EntityState { ... });
+
+// Publish ConstructionRequest to network
+_bus.Publish(new ConstructionRequest 
+{ 
+    EntityId = tank.NetworkId,
+    Modules = new[] { PHYSICS_MODULE_ID, AI_MODULE_ID, NETWORK_MODULE_ID }
+});
+
+// Wait for all modules to ACK...
+// (Entity remains invisible until fully initialized)
+
+// Once all ACKs received → SetLifecycleState(Active)
+```
+
+**See:** [Entity Lifecycle Management](#entity-lifecycle-management) for full details.
+
+---
+
+#### 2. Distributed Ownership
+
+**Purpose:** Allow multiple nodes to control different aspects of the same entity.
+
+**Partial Ownership Example:**
+```csharp
+// Tank entity with split ownership
+var ownership = new NetworkOwnership
+{
+    LocalNodeId = 1,
+    PrimaryOwnerId = 1,  // Node 1 owns tank
+    PartialOwners = new Dictionary<long, int>
+    {
+        { ENTITY_STATE_TYPE_ID, 1 },  // Node 1 publishes movement
+        { WEAPON_STATE_TYPE_ID, 2 }   // Node 2 publishes weapon
+    }
+};
+
+// Node 1: Publish EntityState (movement, heading)
+if (ownership.OwnsDescriptor(ENTITY_STATE_TYPE_ID))
+{
+    _ddsWriter.WriteEntityState(tank.EntityState);
+}
+
+// Node 2: Publish WeaponState (aim, ammo)
+if (ownership.OwnsDescriptor(WEAPON_STATE_TYPE_ID))
+{
+    _ddsWriter.WriteWeaponState(tank.WeaponState);
+}
+
+// Both nodes receive both descriptors → full tank state
+```
+
+**See:** [Distributed Ownership & Network Integration](#distributed-ownership--network-integration) for full details.
+
+---
+
+#### 3. Geographic Transform Services
+
+**Purpose:** Convert between local Cartesian (simulation) and global Geodetic (network) coordinates.
+
+**Typical Flow:**
+```
+Local Simulation:
+  1. Physics updates Position {X=1000, Y=2000, Z=100} (meters, local)
+  2. CoordinateTransformSystem →
+     PositionGeodetic {Lat=37.xxx, Lon=-122.xxx, Alt=100} (WGS84)
+  3. Publish PositionGeodetic to network
+
+Remote Node:
+  1. Receive PositionGeodetic from network
+  2. NetworkSmoothingSystem →
+     Position {X=..., Y=..., Z=...} (local to remote's origin)
+  3. Rendering uses local Position
+```
+
+**Benefits:**
+- Network messages independent of local coordinate frame
+- Each node chooses its own origin
+- No coordinate frame synchronization needed
+- Global interoperability (GPS, mapping)
+
+**See:** [Geographic Transform Services](#geographic-transform-services) for full details.
+
+---
+
+### Integration Workflow
+
+#### Setting Up Network Integration
+
+**1. Register Modules:**
+```csharp
+var kernel = new ModuleHostKernel(repository);
+
+// Entity Lifecycle (coordinates construction/destruction)
+var elm = new EntityLifecycleModule(new[] 
+{ 
+    PHYSICS_MODULE_ID,
+    AI_MODULE_ID,
+    NETWORK_MODULE_ID
+});
+kernel.RegisterModule(elm);
+
+// Geographic Transform (local ↔ geodetic)
+var geoTransform = new WGS84Transform(
+    originLat: 37.7749,  // San Francisco
+    originLon: -122.4194,
+    originAlt: 0.0
+);
+var geoModule = new GeographicTransformModule(geoTransform);
+kernel.RegisterModule(geoModule);
+
+// Network Gateway (DDS pub/sub)
+var networkModule = new NetworkGatewayModule(
+    localNodeId: 1,
+    ddsParticipant: participant
+);
+kernel.RegisterModule(networkModule);
+```
+
+---
+
+**2. Configure Ownership:**
+```csharp
+// Define which node owns which descriptors
+var ownershipConfig = new Dictionary<ulong, NetworkOwnership>
+{
+    [tank.NetworkId] = new NetworkOwnership
+    {
+        LocalNodeId = 1,
+        PrimaryOwnerId = 1,
+        PartialOwners = new()
+        {
+            { ENTITY_MASTER_TYPE_ID, 1 },   // Node 1 (primary)
+            { ENTITY_STATE_TYPE_ID, 1 },     // Node 1 (movement)
+            { WEAPON_STATE_TYPE_ID, 2 }      // Node 2 (weapon)
+        }
+    }
+};
+
+networkModule.ApplyOwnership(ownershipConfig);
+```
+
+---
+
+**3. Register Descriptor-Component Mappings:**
+```csharp
+var ownershipMap = new DescriptorOwnershipMap();
+
+// Map EntityState descriptor to Position + Velocity components
+ownershipMap.RegisterMapping(
+    descriptorTypeId: ENTITY_STATE_TYPE_ID,
+    componentTypes: new[] { typeof(Position), typeof(Velocity) }
+);
+
+// Map WeaponState descriptor to WeaponState component
+ownershipMap.RegisterMapping(
+    descriptorTypeId: WEAPON_STATE_TYPE_ID,
+    componentTypes: new[] { typeof(WeaponState) }
+);
+
+networkModule.SetOwnershipMap(ownershipMap);
+```
+
+---
+
+**4. Run Simulation:**
+```csharp
+void Update(float deltaTime)
+{
+    // 1. Tick repository (increment frame/version)
+    _repository.Tick();
+    
+    // 2. Execute all modules
+    _kernel.Update(deltaTime);
+    
+    // Internally, modules execute in this order:
+    // - Input Phase: NetworkGatewayModule (ingest DDS samples)
+    // - Simulation Phase: Physics, AI
+    // - PostSimulation Phase: GeographicTransformModule (local → geodetic)
+    // - Export Phase: NetworkGatewayModule (publish owned descriptors)
+}
+```
+
+---
+
+### Complete Example: Distributed Tank Simulation
+
+**Scenario:** Two nodes simulating a shared tank.
+- **Node 1:** Controls movement (driver)
+- **Node 2:** Controls weapon (gunner)
+
+**Node 1 Setup:**
+```csharp
+// Create tank entity
+var tank = _repository.CreateEntity();
+
+// Add components
+_repository.AddComponent(tank, new Position { X = 0, Y = 0, Z = 0 });
+_repository.AddComponent(tank, new Velocity { X = 10, Y = 0, Z = 0 });
+_repository.AddComponent(tank, new WeaponState { Aim = 0, Ammo = 100 });
+
+// Configure ownership (Node 1 owns movement, Node 2 owns weapon)
+var ownership = new NetworkOwnership
+{
+    LocalNodeId = 1,
+    PrimaryOwnerId = 1,
+    PartialOwners = new()
+    {
+        { ENTITY_MASTER_TYPE_ID, 1 },
+        { ENTITY_STATE_TYPE_ID, 1 },    // Node 1 publishes
+        { WEAPON_STATE_TYPE_ID, 2 }     // Node 2 publishes
+    }
+};
+
+_networkModule.SetOwnership(tank.NetworkId, ownership);
+
+// Start simulation
+```
+
+**Node 1 Every Frame:**
+```csharp
+void Update(float deltaTime)
+{
+    _repository.Tick();
+    
+    // 1. Receive weapon updates from Node 2 (via NetworkGatewayModule)
+    //    → WeaponState component updated
+    
+    // 2. Physics updates Position based on Velocity (local)
+    
+    // 3. CoordinateTransformSystem: Position → PositionGeodetic
+    
+    // 4. Publish EntityState (contains PositionGeodetic + Velocity) to network
+    //    (NetworkGatewayModule checks ownership.OwnsDescriptor(ENTITY_STATE_TYPE_ID))
+}
+```
+
+**Node 2 Setup:**
+```csharp
+// Receive tank entity from network
+// (NetworkGatewayModule creates replica entity)
+
+var tank = FindEntity(networkId: 42);
+
+// Configure ownership (same as Node 1, but LocalNodeId = 2)
+var ownership = new NetworkOwnership
+{
+    LocalNodeId = 2,
+    PrimaryOwnerId = 1,
+    PartialOwners = new()
+    {
+        { ENTITY_MASTER_TYPE_ID, 1 },
+        { ENTITY_STATE_TYPE_ID, 1 },
+        { WEAPON_STATE_TYPE_ID, 2 }     // Node 2 publishes
+    }
+};
+
+_networkModule.SetOwnership(tank.NetworkId, ownership);
+```
+
+**Node 2 Every Frame:**
+```csharp
+void Update(float deltaTime)
+{
+    _repository.Tick();
+    
+    // 1. Receive EntityState from Node 1 (via NetworkGatewayModule)
+    //    → Position + Velocity updated
+    
+    // 2. Player input updates WeaponState (aim, firing)
+    
+    // 3. Publish WeaponState to network
+    //    (NetworkGatewayModule checks ownership.OwnsDescriptor(WEAPON_STATE_TYPE_ID))
+}
+```
+
+**Result:** Both nodes see a fully functional tank, with movement controlled by Node 1 and weapon by Node 2.
+
+---
+
+### Network Data Flow
+
+**Publishing (Egress):**
+
+```
+Local FDP Component → Translator → SST Descriptor → DDS → Network
+       ↓                  ↓              ↓
+   Position {X,Y,Z}    Transform    EntityState
+   Velocity {Vx,Vy}    Bundle →     {Lat, Lon, Alt,
+                                     Vx, Vy, Vz}
+```
+
+**Receiving (Ingress):**
+
+```
+Network → DDS → SST Descriptor → Translator → Local FDP Component
+                      ↓              ↓              ↓
+                  EntityState    Transform    Position {X,Y,Z}
+                  {Lat, Lon,...} Unpack →     Velocity {Vx,Vy}
+```
+
+**Ownership Check (Egress):**
+```csharp
+foreach (var entity in owned Entities)
+{
+    if (ownership.OwnsDescriptor(ENTITY_STATE_TYPE_ID))
+    {
+        // Translate components → descriptor
+        var descriptor = TranslateToEntityState(entity);
+        
+        // Publish to network
+        _ddsWriter.Write(descriptor);
+    }
+}
+```
+
+**Ownership Application (Ingress):**
+```csharp
+foreach (var sample in _ddsReader.TakeSamples())
+{
+    var entity = FindOrCreateEntity(sample.NetworkId);
+    
+    // Translate descriptor → components
+    TranslateToComponents(sample.Data, entity);
+    
+    // Sync ownership metadata to FDP components
+    var ownerId = ownership.GetOwner(sample.DescriptorTypeId);
+    _repository.SetComponentMetadata(entity, typeof(Position), new() { OwnerId = ownerId });
+}
+```
+
+---
+
+### Best Practices
+
+#### ✅ DO: Use EntityLifecycleModule for Coordinated Creation
+
+```csharp
+// ✅ GOOD: Dark construction with lifecycle
+var entity = _repository.CreateEntity();
+_elm.SetLifecycleState(entity, EntityLifecycle.Constructing);
+
+// Initialize components...
+
+_bus.Publish(new ConstructionRequest { EntityId = entity.NetworkId, ... });
+
+// Wait for ACKs, then:
+_elm.SetLifecycleState(entity, EntityLifecycle.Active);
+```
+
+**Why:** Prevents race conditions where some nodes see partially-initialized entities.
+
+---
+
+#### ✅ DO: Assign Primary Owner for Every Entity
+
+```csharp
+// ✅ GOOD: Explicit primary owner
+var ownership = new NetworkOwnership
+{
+    LocalNodeId = 1,
+    PrimaryOwnerId = 2,  // Node 2 is primary
+    PartialOwners = new() { ... }
+};
+```
+
+**Why:** Primary owner handles entity deletion and ownership fallback.
+
+---
+
+#### ✅ DO: Use Geographic Transforms for Global Simulations
+
+```csharp
+// ✅ GOOD: Geodetic coordinates on network
+var transform = new WGS84Transform(originLat, originLon, originAlt);
+var geoModule = new GeographicTransformModule(transform);
+kernel.RegisterModule(geoModule);
+
+// Local: Position {X, Y, Z} (meters from origin)
+// Network: PositionGeodetic {Lat, Lon, Alt} (WGS84)
+```
+
+**Why:** Nodes can have different local origins, enables GPS integration.
+
+---
+
+#### ⚠️ DON'T: Publish Descriptors You Don't Own
+
+```csharp
+// ❌ BAD: Publishing without ownership check
+_ddsWriter.WriteWeaponState(tank.Weapon); // Violates SST protocol!
+
+// ✅ GOOD: Check ownership first
+if (_ownership.OwnsDescriptor(WEAPON_STATE_TYPE_ID))
+{
+    _ddsWriter.WriteWeaponState(tank.Weapon);
+}
+```
+
+**Why:** Violates Single Source of Truth (SST), causes conflicts and undefined behavior.
+
+---
+
+#### ⚠️ DON'T: Assume Ownership is Static
+
+```csharp
+// ❌ BAD: Caching ownership decision
+private bool _ownsWeapon = _ownership.OwnsDescriptor(WEAPON_STATE_TYPE_ID);
+
+void Update()
+{
+    if (_ownsWeapon) // Stale!
+    {
+        PublishWeapon();
+    }
+}
+
+// ✅ GOOD: Check ownership every frame
+void Update()
+{
+    if (_ownership.OwnsDescriptor(WEAPON_STATE_TYPE_ID))
+    {
+        PublishWeapon();
+    }
+}
+```
+
+**Why:** Ownership can transfer at runtime (hand-off scenarios).
+
+---
+
+### Troubleshooting
+
+#### Problem: Entity Appears Partially Initialized
+
+**Symptoms:**
+- Some components present, others missing
+- Systems crash accessing non-existent components
+
+**Cause:** Entity became Active before all modules ACKed construction.
+
+**Solution:**
+```csharp
+// Ensure lifecycle coordination
+_elm.RegisterModules(new[] { PHYSICS_ID, AI_ID, NET_ID });
+
+// Publish construction request
+_bus.Publish(new ConstructionRequest { ... });
+
+// WAIT for ALL ACKs before activating
+// (EntityLifecycleModule handles this automatically)
+```
+
+---
+
+#### Problem: Ownership Conflict Detected
+
+**Symptoms:**
+```
+Warning: Multiple nodes publishing WeaponState (Node 1, Node 2)
+```
+
+**Cause:** Ownership configuration mismatch between nodes.
+
+**Solution:**
+1. **Verify primary owner:**
+   ```csharp
+   Assert.Equal(expectedOwner, _ownership.PrimaryOwnerId);
+   ```
+
+2. **Check partial owners match:**
+   ```csharp
+   Assert.Equal(node2, _ownership.GetOwner(WEAPON_STATE_TYPE_ID));
+   ```
+
+3. **Use ownership transfer protocol** if intentional:
+   ```csharp
+   _networkModule.TransferOwnership(WEAPON_STATE_TYPE_ID, newOwner: 3);
+   ```
+
+---
+
+#### Problem: Geographic Coordinates Incorrect
+
+**Symptoms:**
+- Entity appears at wrong location
+- Large coordinate differences between nodes
+
+**Cause:** Wrong origin or transform not applied.
+
+**Solution:**
+```csharp
+// 1. Verify origin matches intended location
+var transform = new WGS84Transform(
+    originLat: 37.7749,  // San Francisco
+    originLon: -122.4194,
+    originAlt: 0.0
+);
+
+// 2. Verify module registered
+kernel.RegisterModule(new GeographicTransformModule(transform));
+
+// 3. Verify components synced
+var localPos = entity.GetComponent<Position>();
+var geoPos = entity.GetComponent<PositionGeodetic>();
+Console.WriteLine($"Local: {localPos.X}, {localPos.Y}");
+Console.WriteLine($"Geo: {geoPos.Latitude}, {geoPos.Longitude}");
+```
+
+---
+
+### Performance Characteristics
+
+| Operation | Cost | Notes |
+|-----------|------|-------|
+| **Ownership Check** | ~10ns | Dictionary lookup |
+| **Descriptor Translation** | ~50-200ns | Depends on complexity |
+| **DDS Publish** | ~1-5μs | Network I/O |
+| **DDS Subscribe** | ~1-5μs | Network I/O |
+| **Geographic Transform** | ~100ns | Matrix multiplication |
+| **Lifecycle ACK Processing** | ~50ns | Per ACK |
+
+**Throughput:**
+- **100 entities** @ 60Hz → ~6,000 updates/sec
+- **1,000 entities** @ 60Hz → ~60,000 updates/sec
+- **10,000 entities** @ 10Hz → ~100,000 updates/sec
+
+**Network Bandwidth (typical):**
+- EntityState descriptor: ~100 bytes
+- WeaponState descriptor: ~50 bytes
+- 100 entities @ 60Hz: ~900 KB/s
+
+---
+
+### Cross-References
+
+**Related Sections:**
+- [Entity Lifecycle Management](#entity-lifecycle-management) - Dark construction, coordinated teardown
+- [Distributed Ownership & Network Integration](#distributed-ownership--network-integration) - Partial ownership, ownership transfer
+- [Geographic Transform Services](#geographic-transform-services) - Coordinate transforms
+- [Modules & ModuleHost](#modules--modulehost) - NetworkGatewayModule, GeographicTransformModule
+- [Event Bus](#event-bus) - ConstructionRequest, ConstructionAck events
+
+**API Reference:**
+- See [API Reference - Network Integration](API-REFERENCE.md#network-integration)
+
+**Example Code:**
+- `ModuleHost.Core/Network/NetworkGatewayModule.cs` - Network integration module
+- `ModuleHost.Core/Geographic/GeographicTransformModule.cs` - Coordinate transform module
+- `ModuleHost.Core/Lifecycle/EntityLifecycleModule.cs` - Lifecycle coordination
+- `ModuleHost.Core.Tests/NetworkIntegrationTests.cs` - Integration tests
+
+**Related Batches:**
+- BATCH-06 - Entity Lifecycle Management
+- BATCH-07 - Network Integration (Distributed Ownership)
+- BATCH-07.1 - Partial Descriptor Ownership
+- BATCH-08 - Geographic Transform Services
+
+---
+
 ---
 
 **Version 2.0 - January 2026**  
