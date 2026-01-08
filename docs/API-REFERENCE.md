@@ -405,6 +405,122 @@ Replica now has events from `[lastSeenTick+1 ... current]`, enabling slow module
 
 ---
 
+### Entity Lifecycle States
+
+**Implemented in:** BATCH-06 ⭐  
+**Namespace:** `Fdp.Kernel`
+
+```csharp
+public enum EntityLifecycle
+{
+    Constructing,  // Entity being initialized
+    Active,        // Fully initialized and active
+    TearDown       // Being destroyed
+}
+```
+
+**Description:**  
+Lifecycle states for cooperative entity initialization/destruction across distributed modules.
+
+**State Flow:**
+```
+CreateStagedEntity() → Constructing → Active → TearDown → Destroyed
+```
+
+---
+
+#### EntityRepository.CreateStagedEntity()
+
+```csharp
+public Entity CreateStagedEntity()
+```
+
+**Description:**  
+Creates an entity in `Constructing` state (not visible to default queries).
+
+**Returns:** `Entity` - New entity handle
+
+**Usage:**
+```csharp
+var entity = repo.CreateStagedEntity();
+repo.AddComponent(entity, new VehicleState { ... });
+
+// Entity won't appear in normal queries until state → Active
+```
+
+**Default:** `CreateEntity()` defaults to `Active` for backward compatibility.
+
+---
+
+#### EntityRepository.SetLifecycleState()
+
+```csharp
+public void SetLifecycleState(Entity entity, EntityLifecycle state)
+```
+
+**Description:**  
+Manually set entity lifecycle state.
+
+**Parameters:**
+- `entity` - Entity to modify
+- `state` - New lifecycle state
+
+**Usage:**
+```csharp
+// Activate after initialization complete
+repo.SetLifecycleState(entity, EntityLifecycle.Active);
+
+// Mark for destruction
+repo.SetLifecycleState(entity, EntityLifecycle.TearDown);
+```
+
+**Note:** Prefer using EntityLifecycleModule for coordination.
+
+---
+
+#### QueryBuilder Lifecycle Filtering
+
+```csharp
+public QueryBuilder WithLifecycle(EntityLifecycle state);
+public QueryBuilder IncludeConstructing();
+public QueryBuilder IncludeTearDown();
+public QueryBuilder IncludeAll();
+```
+
+**Description:**  
+Filter queries by entity lifecycle state.
+
+**Default Behavior:** Queries only return `Active` entities.
+
+**Usage:**
+```csharp
+// Default: Only active entities
+var query = repo.Query()
+    .With<Position>()
+    .Build();
+
+// Explicit active filter
+var activeQuery = repo.Query()
+    .WithLifecycle(EntityLifecycle.Active)
+    .Build();
+
+// Include constructing entities (editor/debug)
+var allQuery = repo.Query()
+    .IncludeAll()
+    .Build();
+
+// Only constructing entities
+var stagingQuery = repo.Query()
+    .WithLifecycle(EntityLifecycle.Constructing)
+    .Build();
+```
+
+**Performance:** O(1) bitwise check (EntityHeader.LifecycleState), zero overhead.
+
+**See Also:** Entity Lifecycle Management (User Guide)
+
+---
+
 ## Core Abstractions
 
 ### ExecutionPolicy
@@ -1225,6 +1341,154 @@ foreach (var s in stats)
 ```
 
 **Note:** `GetExecutionStats()` resets `ExecutionCount` to 0 after returning (read-once behavior).
+
+---
+
+## Entity Lifecycle Management
+
+**Implemented in:** BATCH-06 ⭐  
+**Namespace:** `ModuleHost.Core.ELM`
+
+Cooperative entity initialization and destruction across distributed modules.
+
+**See Also:** Entity Lifecycle Management (User Guide)
+
+---
+
+### EntityLifecycleModule
+
+```csharp
+public class EntityLifecycleModule : IModule
+{
+    public EntityLifecycleModule(int[] participatingModules, int timeoutFrames = 300);
+    
+    public void BeginConstruction(Entity entity, int typeId, uint currentFrame, IEntityCommandBuffer cmd);
+    public void BeginDestruction(Entity entity, uint currentFrame, FixedString64 reason, IEntityCommandBuffer cmd);
+    
+    public (int pending, int constructed, int destroyed, int timeouts) GetStatistics();
+}
+```
+
+**Description:**  
+Central coordinator for entity lifecycle. Tracks ACKs from participating modules.
+
+**Constructor:**
+- `participatingModules` - Module IDs that must ACK (e.g., `new[] { 1, 2, 3 }`)
+- `timeoutFrames` - Frames before timeout (default: 300 = 5s at 60 FPS)
+
+**Methods:**
+
+#### BeginConstruction()
+```csharp
+public void BeginConstruction(Entity entity, int typeId, uint currentFrame, IEntityCommandBuffer cmd)
+```
+
+Starts construction flow. Publishes `ConstructionOrder` event.
+
+**Parameters:**
+- `entity` - Entity to construct (should be in `Constructing` state)
+- `typeId` - Entity type identifier (for module filtering)
+- `currentFrame` - Current frame number (for timeout tracking)
+- `cmd` - Command buffer for event publishing
+
+**Flow:**
+1. Publishes `ConstructionOrder{ Entity, TypeId }`
+2. Waits for `ConstructionAck` from all participating modules
+3. On all ACKs → Sets entity to `Active`
+4. On NACK/timeout → Destroys entity
+
+#### BeginDestruction()
+```csharp
+public void BeginDestruction(Entity entity, uint currentFrame, FixedString64 reason, IEntityCommandBuffer cmd)
+```
+
+Starts destruction flow. Publishes `DestructionOrder` event.
+
+**Parameters:**
+- `entity` - Entity to destroy
+- `currentFrame` - Current frame number
+- `reason` - Destruction reason (for logging/debugging)
+- `cmd` - Command buffer
+
+**Flow:**
+1. Sets entity to `TearDown` state
+2. Publishes `DestructionOrder{ Entity, Reason }`
+3. Waits for `DestructionAck` from all participating modules
+4. On all ACKs → Destroys entity
+5. On timeout → Force-destroys entity
+
+#### GetStatistics()
+```csharp
+public (int pending, int constructed, int destroyed, int timeouts) GetStatistics()
+```
+
+Returns ELM statistics for monitoring.
+
+**Returns:**
+- `pending` - Entities awaiting ACKs
+- `constructed` - Successfully activated entities
+- `destroyed` - Successfully destroyed entities
+- `timeouts` - Entities that timed out
+
+---
+
+### Lifecycle Events
+
+**Namespace:** `ModuleHost.Core.ELM`
+
+All lifecycle events are **unmanaged structs** (zero GC).
+
+```csharp
+public struct ConstructionOrder
+{
+    public Entity Entity;
+    public int TypeId;
+}
+
+public struct ConstructionAck
+{
+    public Entity Entity;
+    public int ModuleId;
+    public bool Success;
+    public FixedString64 ErrorMessage;  // If Success=false
+}
+
+public struct DestructionOrder
+{
+    public Entity Entity;
+    public FixedString64 Reason;
+}
+
+public struct DestructionAck
+{
+    public Entity Entity;
+    public int ModuleId;
+    public bool Success;
+}
+```
+
+**Usage:**
+```csharp
+// Module reacts to construction order
+foreach (var order in view.ConsumeEvents<ConstructionOrder>())
+{
+    if (order.TypeId == MY_ENTITY_TYPE)
+    {
+        // Perform setup
+        cmd.AddComponent(order.Entity, new MyComponent { ... });
+        
+        // ACK success
+        cmd.PublishEvent(new ConstructionAck
+        {
+            Entity = order.Entity,
+            ModuleId = MY_MODULE_ID,
+            Success = true
+        });
+    }
+}
+```
+
+**Performance:** Unmanaged events ensure zero GC pressure for lifecycle coordination.
 
 ---
 

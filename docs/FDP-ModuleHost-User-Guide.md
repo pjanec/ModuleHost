@@ -1826,6 +1826,268 @@ public class CombatSystem : ComponentSystem
 
 ---
 
+## Entity Lifecycle Management
+
+**Implemented in:** BATCH-06 ⭐
+
+The Entity Lifecycle Manager (ELM) provides cooperative coordination for entity creation and destruction across distributed modules, ensuring entities are fully initialized before becoming active in simulation.
+
+### The Problem
+
+In a distributed module architecture, entities need initialization from multiple systems:
+- **Physics** module sets up collision bounds
+- **AI** module initializes behavior trees
+- **Network** module registers for replication
+
+Without coordination, entities become visible to queries before all modules complete setup, causing:
+- ❌ Physics queries see entities without collision data
+- ❌ AI tries to pathfind with uninitialized navigation
+- ❌ Network replicates incomplete state
+
+### Entity Lifecycle States
+
+Entities progress through three states:
+
+```csharp
+public enum EntityLifecycle
+{
+    Constructing,  // Entity being initialized (not visible to normal queries)
+    Active,        // Fully initialized and active in simulation
+    TearDown       // Being destroyed (cleanup in progress)
+}
+```
+
+**State Transitions:**
+```
+CreateStagedEntity()
+    ↓
+[Constructing] ──► All modules ACK ──► [Active] ──► BeginDestruction() ──►  [TearDown] ──► All modules ACK ──► Destroyed
+    │                                                        │
+    └─► NACK/Timeout ──► Destroyed                         └─► Timeout ──► Force Destroyed
+```
+
+### Construction Flow
+
+#### 1. Create Staged Entity
+
+```csharp
+// Spawner system
+var entity = repo.CreateStagedEntity(); // Starts in 'Constructing' state
+repo.AddComponent(entity, new VehicleState { ... });
+
+// Register with ELM
+var cmd = view.GetCommandBuffer();
+elm.BeginConstruction(entity, vehicleTypeId, currentFrame, cmd);
+```
+
+#### 2. ELM Publishes Order
+
+```csharp
+// ELM automatically publishes
+public struct ConstructionOrder
+{
+    public Entity Entity;
+    public int TypeId;  // e.g., VEHICLE_TYPE_ID
+}
+```
+
+#### 3. Modules Initialize
+
+Modules react to the order and perform their setup:
+
+```csharp
+// Physics Module
+[UpdateInPhase(SystemPhase.BeforeSync)]
+public class PhysicsInitSystem : IModuleSystem
+{
+    public void Execute(ISimulationView view, float deltaTime)
+    {
+        var cmd = view.GetCommandBuffer();
+        
+        foreach (var order in view.ConsumeEvents<ConstructionOrder>())
+        {
+            if (order.TypeId == VEHICLE_TYPE_ID)
+            {
+                // Setup collision
+                var bounds = new CollisionBounds { ... };
+                cmd.AddComponent(order.Entity, bounds);
+                
+                // ACK success
+                cmd.PublishEvent(new ConstructionAck
+                {
+                    Entity = order.Entity,
+                    ModuleId = PHYSICS_MODULE_ID,
+                    Success = true
+                });
+            }
+        }
+    }
+}
+```
+
+#### 4. ELM Activates Entity
+
+When **ALL** registered modules send `ConstructionAck`:
+- ELM sets entity state to `Active`
+- Entity becomes visible to normal queries
+- Simulation continues
+
+**On Failure:**
+- Any module sends `Success = false` → Entity immediately destroyed
+- Timeout (default 5s) → Entity abandoned and destroyed
+
+### Destruction Flow
+
+#### 1. Begin Destruction
+
+```csharp
+// Damage system detects death
+if (health.Current <= 0)
+{
+    elm.BeginDestruction(entity, currentFrame, "Health depleted", cmd);
+}
+```
+
+#### 2. ELM Publishes Order
+
+```csharp
+public struct DestructionOrder
+{
+    public Entity Entity;
+    public FixedString64 Reason;
+}
+```
+
+#### 3. Modules Cleanup
+
+```csharp
+// Network Module
+foreach (var order in view.ConsumeEvents<DestructionOrder>())
+{
+    // Unregister from replication
+    networkTable.Unregister(order.Entity);
+    
+    // Send final state to clients
+    SendDestroyMessage(order.Entity);
+    
+    // ACK cleanup complete
+    cmd.PublishEvent(new DestructionAck
+    {
+        Entity = order.Entity,
+        ModuleId = NETWORK_MODULE_ID,
+        Success = true
+    });
+}
+```
+
+#### 4. ELM Destroys Entity
+
+When ALL modules ACK:
+- Entity destroyed
+- Resources freed
+- No memory leaks
+
+### Query Filtering
+
+By default, queries only return `Active` entities:
+
+```csharp
+// Default: Only active entities
+var query = repo.Query()
+    .With<VehicleState>()
+    .Build();
+
+query.ForEach(entity =>
+{
+    // Only sees fully constructed, active entities
+});
+```
+
+**Include Constructing Entities:**
+```csharp
+// Debug/editor tools
+var allQuery = repo.Query()
+    .With<VehicleState>()
+    .IncludeAll()  // Include Constructing + Active + TearDown
+    .Build();
+```
+
+**Explicit Filtering:**
+```csharp
+// Only entities being set up
+var constructingQuery = repo.Query()
+    .WithLifecycle(EntityLifecycle.Constructing)
+    .Build();
+
+// Only entities being destroyed
+var teardownQuery = repo.Query()
+    .WithLifecycle(EntityLifecycle.TearDown)
+    .Build();
+```
+
+### ELM Setup
+
+#### 1. Register Participating Modules
+
+```csharp
+// ModuleHost initialization
+var elm = new EntityLifecycleModule(new[]
+{
+    PHYSICS_MODULE_ID,  // 1
+    AI_MODULE_ID,       // 2
+    NETWORK_MODULE_ID   // 3
+});
+
+kernel.RegisterModule(elm);
+kernel.RegisterModule(physicsModule);  // Must have Id = 1
+kernel.RegisterModule(aiModule);       // Must have Id = 2
+kernel.RegisterModule(networkModule);  // Must have Id = 3
+```
+
+#### 2. Configure Timeouts
+
+```csharp
+var elm = new EntityLifecycleModule(
+    participatingModules: new[] { 1, 2, 3 },
+    timeoutFrames: 300  // 5 seconds at 60 FPS (default)
+);
+```
+
+### Best Practices
+
+#### ✅ DO:
+- Use ELM for multi-system entities (vehicles, characters, buildings)
+- Set reasonable timeouts based on module complexity
+- Handle `ConstructionOrder` in `BeforeSync` phase for determinism
+- Log NACK reasons for debugging
+
+#### ❌ DON'T:
+- Use ELM for simple entities (particles, projectiles)
+- Block in construction handlers (defeats async purpose)
+- Forget to ACK (causes timeout and entity destruction)
+
+### Performance
+
+- **Lifecycle filtering:** O(1) bitwise check in query hot loop
+- **ACK tracking:** O(1) dictionary lookup per entity
+- **Events:** Unmanaged structs (zero GC)
+- **Overhead:** ~50ns per entity query (negligible)
+
+### Statistics
+
+Monitor ELM health:
+
+```csharp
+var stats = elm.GetStatistics();
+
+Console.WriteLine($"Pending: {stats.pending}");        // Entities waiting for ACKs
+Console.WriteLine($"Constructed: {stats.constructed}");  // Successfully activated
+Console.WriteLine($"Destroyed: {stats.destroyed}");      // Successfully cleaned up
+Console.WriteLine($"Timeouts: {stats.timeouts}");        // Failed due to timeout
+```
+
+---
+
 ## Simulation Views & Execution Modes
 
 ### The Triple-Buffering Strategy
