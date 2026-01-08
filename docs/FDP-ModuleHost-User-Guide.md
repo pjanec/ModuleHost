@@ -4193,5 +4193,526 @@ protected override void OnUpdate()
 
 ---
 
+## Geographic Transform Services
+
+### Overview
+
+The Geographic Transform Services bridge FDP's local Cartesian coordinate system with global WGS84 geodetic coordinates (latitude/longitude/altitude). This enables:
+
+- **Network Interoperability:** Exchange entity positions in standardized geodetic format
+- **Global Positioning:** Place simulations anywhere on Earth
+- **Smooth Network Updates:** Interpolate remote entity positions for rendering
+
+**Module:** `Ge GraphicTransformModule`  
+**Namespace:** `ModuleHost.Core.Geographic`
+
+---
+
+### Core Concepts
+
+#### Local vs Geodetic Coordinates
+
+**Local (Cartesian):**
+- Physics simulation coordinate system
+- Origin at chosen geographic point
+- X = East, Y = North, Z = Up (ENU tangent plane)
+- Units: meters
+- Fast for physics calculations
+
+**Geodetic (WGS84):**
+- Global coordinate system
+- Latitude/Longitude in degrees, Altitude in meters
+- Used for network messages and global positioning
+- Standardized across distributed nodes
+
+#### Automatic Synchronization
+
+The system automatically keeps local and geodetic coordinates synchronized based on **ownership**:
+
+```
+Owned Entities (Physics Authority):
+  Position (XYZ) → PositionGeodetic (Lat/Lon/Alt)
+  "I control physics, update network state"
+
+Remote Entities (Network Authority):
+  PositionGeodetic (Lat/Lon/Alt) → Position (XYZ)
+  "Network updates me, interpolate smoothly"
+```
+
+---
+
+### Setup
+
+#### 1. Create Module
+
+```csharp
+using ModuleHost.Core.Geographic;
+
+// Place simulation origin (San Francisco coords used as example)
+var geoModule = new GeographicTransformModule(
+    latitudeDeg: 37.7749,
+    longitudeDeg: -122.4194,
+    altitudeMeters: 0
+);
+
+kernel.RegisterModule(geoModule);
+```
+
+**Important:** Choose an origin near your simulation area. Accuracy degrades beyond ~100km.
+
+#### 2. Add Components to Entities
+
+```csharp
+using ModuleHost.Core.Geographic;
+using ModuleHost.Core.Network;
+
+// For networked entities:
+var entity = repo.CreateEntity();
+
+// Physics position (local Cartesian)
+repo.AddComponent(entity, new Position { Value = new Vector3(100, 0, 50) });
+
+// Geodetic position (for network)
+repo.AddComponent(entity, new PositionGeodetic
+{
+    Latitude = 37.7749,
+    Longitude = -122.4194,
+    Altitude = 50
+});
+
+// Ownership (determines sync direction)
+repo.AddComponent(entity, new NetworkOwnership
+{
+    LocalNodeId = 1,    // This node's ID
+    PrimaryOwnerId = 1  // Who owns this entity (1 = us, 2 = remote)
+});
+```
+
+---
+
+### How It Works
+
+The module runs two systems in sequence:
+
+#### 1. NetworkSmoothingSystem (Input Phase)
+
+**Purpose:** Smooths remote entity positions for rendering
+
+**When:** Input phase (before physics)
+
+**Logic:**
+```
+For each REMOTE entity:
+  1. Read PositionGeodetic (from network update)
+  2. Convert to local Cartesian
+  3. Lerp current Position toward target (dead reckoning)
+  4. Update Position component
+```
+
+**Code Flow:**
+```csharp
+// Remote entity (PrimaryOwnerId != LocalNodeId)
+var geoPos = GetManagedComponentRO<PositionGeodetic>(entity);
+var targetCartesian = transform.ToCartesian(
+    geoPos.Latitude,
+    geoPos.Longitude,
+    geoPos.Altitude
+);
+
+float t = Math.Clamp(deltaTime * 10.0f, 0f, 1f);  // Smoothing factor
+Position.Value = Vector3.Lerp(Position.Value, targetCartesian, t);
+```
+
+**Smoothing:** Converges to target over ~0.1 seconds (configurable via smoothing factor)
+
+#### 2. CoordinateTransformSystem (PostSimulation Phase)
+
+**Purpose:** Updates geodetic coordinates from physics
+
+**When:** Post-simulation phase (after physics updates Position)
+
+**Logic:**
+```
+For each OWNED entity:
+  1. Read Position (from physics simulation)
+  2. Convert to geodetic coordinates
+  3. Update PositionGeodetic (for network egress)
+```
+
+**Code Flow:**
+```csharp
+// Owned entity (PrimaryOwnerId == LocalNodeId)
+var (lat, lon, alt) = transform.ToGeodetic(Position.Value);
+
+// Only update if changed significantly (epsilon threshold)
+if (Math.Abs(geoPos.Latitude - lat) > 1e-6 || ...)
+{
+    PositionGeodetic = new PositionGeodetic
+    {
+        Latitude = lat,
+        Longitude = lon,
+        Altitude = alt
+    };
+}
+```
+
+**Optimization:** Skips update if change < 1e-6 degrees (~10cm) or < 0.1m altitude
+
+---
+
+### Components
+
+#### Position (struct)
+Local Cartesian position for physics.
+
+```csharp
+public struct Position
+{
+    public Vector3 Value;  // X=East, Y=North, Z=Up (meters)
+}
+```
+
+**Used By:** Physics systems, rendering
+
+#### PositionGeodetic (class)
+Global geodetic position for networking.
+
+```csharp
+public class PositionGeodetic
+{
+    public double Latitude;   // Degrees (-90 to 90)
+    public double Longitude;  // Degrees (-180 to 180)
+    public double Altitude;   // Meters above WGS84 ellipsoid
+}
+```
+
+**Used By:** Network translators, external systems
+
+**Note:** Managed component (class) because doubles + precision requirements.
+
+#### NetworkOwnership (struct)
+Determines which node controls entity physics.
+
+```csharp
+public struct NetworkOwnership
+{
+    public int LocalNodeId;     // This node's ID
+    public int PrimaryOwnerId;  // Who owns this entity
+}
+```
+
+**Authority Check:**
+```csharp
+bool isOwned = ownership.PrimaryOwnerId == ownership.LocalNodeId;
+```
+
+---
+
+### Usage Examples
+
+#### Example 1: Positioning an Aircraft
+
+```csharp
+// Spawn F-16 over San Francisco Bay
+var f16 = repo.CreateEntity();
+
+// Start at specific location
+repo.AddComponent(f16, new PositionGeodetic
+{
+    Latitude = 37.8,          // Over the bay
+    Longitude = -122.42,
+    Altitude = 1000           // 1km altitude
+});
+
+// Ownership: We control this aircraft
+repo.AddComponent(f16, new NetworkOwnership
+{
+    LocalNodeId = 1,
+    PrimaryOwnerId = 1  // We own it
+});
+
+// Physics: Convert geodetic to local on first tick
+// (NetworkSmoothingSystem will initialize Position if PrimaryOwner)
+// OR manually initialize:
+var transform = new WGS84Transform();
+transform.SetOrigin(37.7749, -122.4194, 0);
+var localPos = transform.ToCartesian(37.8, -122.42, 1000);
+
+repo.AddComponent(f16, new Position { Value = localPos });
+```
+
+#### Example 2: Receiving Remote Entity
+
+```csharp
+// Network ingress received EntityStateDescriptor for entity ID 100
+var remoteEntity = repo.CreateEntity();
+
+// Network data
+repo.AddComponent(remoteEntity, new PositionGeodetic
+{
+    Latitude = 37.75,
+    Longitude = -122.45,
+    Altitude = 500
+});
+
+// Ownership: Remote node controls it
+repo.AddComponent(remoteEntity, new NetworkOwnership
+{
+    LocalNodeId = 1,
+    PrimaryOwnerId = 2  // Owned by node 2
+});
+
+// NetworkSmoothingSystem will automatically:
+// - Convert geodetic → local
+// - Update Position component
+// - Smooth movement each frame
+```
+
+#### Example 3: Check if Position Changed
+
+```csharp
+// In your custom system
+foreach (var entity in _query)
+{
+    var geo = view.GetManagedComponentRO<PositionGeodetic>(entity);
+    
+    Console.WriteLine($"Entity at: {geo.Latitude:F6}, {geo.Longitude:F6}, {geo.Altitude:F1}m");
+}
+```
+
+---
+
+### Coordinate System Details
+
+#### WGS84 Ellipsoid
+
+**Constants:**
+- Semi-major axis (a): 6,378,137 meters
+- Flattening (f): 1 / 298.257223563
+- Eccentricity² (e²): 0.00669437999...
+
+**Transform Method:**
+1. Geodetic → ECEF (Earth-Centered, Earth-Fixed)
+2. ECEF → Local ENU (East-North-Up tangent plane)
+3. Rotation based on origin latitude/longitude
+
+**Precision:**
+- **Horizontal:** Sub-centimeter within 10km
+- **Horizontal:** ~10cm within 100km
+- **Vertical:** ~1m (altitude less critical for most simulations)
+
+#### Coordinate Frame (ENU)
+
+```
+      Z (Up)
+      |
+      |
+      |_____Y (North)
+     /
+    /
+   X (East)
+```
+
+**Alignment:**
+- +X: East
+- +Y: North
+- +Z: Up (perpendicular to ellipsoid at origin)
+
+**Matches:** Aviation/simulation conventions (not Unity which is Y-up)
+
+---
+
+### Performance
+
+#### Execution Order
+
+```
+Frame Start
+  ↓
+[Input Phase] NetworkSmoothingSystem
+  - Inbound: Geodetic → Local (for remote entities)
+  ↓
+[Simulation Phase] Physics/Game Logic
+  - Updates Position for owned entities
+  ↓
+[PostSimulation Phase] CoordinateTransformSystem
+  - Outbound: Local → Geodetic (for owned entities)
+  ↓
+Frame End
+```
+
+#### Costs
+
+**NetworkSmoothingSystem:**
+- Per remote entity: ~200 cycles (trig functions)
+- 100 remote entities: ~20,000 cycles (~0.007ms @ 3GHz)
+
+**CoordinateTransformSystem:**
+- Per owned entity: ~500 cycles (iterative ECEF conversion)
+- 100 owned entities: ~50,000 cycles (~0.017ms @ 3GHz)
+- **Optimization:** Add dirty checking (future)
+
+**Total Overhead:** <0.03ms for 200 networked entities
+
+---
+
+### Best Practices
+
+#### ✅ DO: Choose Origin Wisely
+
+```csharp
+// Place origin near simulation center
+var geoModule = new GeographicTransformModule(
+    latitudeDeg: 37.7749,   // San Francisco
+    longitudeDeg: -122.4194,
+    altitudeMeters: 0
+);
+```
+
+**Why:** Accuracy degrades with distance. Keep entities within 100km of origin.
+
+#### ✅ DO: Use Ownership Correctly
+
+```csharp
+// Owned entity: Physics drives geodetic
+repo.AddComponent(entity, new NetworkOwnership
+{
+    LocalNodeId = 1,
+    PrimaryOwnerId = 1  // We own it
+});
+
+// Remote entity: Geodetic drives physics
+repo.AddComponent(entity, new NetworkOwnership
+{
+    LocalNodeId = 1,
+    PrimaryOwnerId = 2  // They own it
+});
+```
+
+#### ✅ DO: Let Systems Handle Sync
+
+Don't manually sync coordinates - the systems do it automatically:
+
+```csharp
+// ❌ DON'T DO THIS:
+var pos = repo.GetComponentRO<Position>(entity);
+var geo = transform.ToGeodetic(pos.Value);
+repo.SetManagedComponent(entity, new PositionGeodetic { ... });
+
+// ✅ DO THIS (systems handle it):
+// Just update Position for owned entities
+repo.SetComponent(entity, new Position { Value = newPos });
+// CoordinateTransformSystem will update PositionGeodetic
+```
+
+#### ⚠️ DON'T: Fight Ownership
+
+```csharp
+// ❌ WRONG: Updating physics for remote entity
+if (ownership.PrimaryOwnerId != ownership.LocalNodeId)
+{
+    // Don't update Position here!
+    // Let NetworkSmoothingSystem do it
+}
+```
+
+#### ⚠️ DON'T: Exceed Range Limit
+
+```csharp
+// ❌ WRONG: Entity 200km from origin
+var entity = repo.CreateEntity();
+repo.AddComponent(entity, new Position { Value = new Vector3(200_000, 0, 0) });
+// Geodetic conversion accuracy degraded!
+
+// ✅ CORRECT: Move simulation origin if needed
+if (maxDistance > 100_000)
+{
+    // Re-origin simulation to new center
+    geoModule.SetOrigin(newLat, newLon, newAlt);
+}
+```
+
+---
+
+### Troubleshooting
+
+#### Problem: Remote entities "snap" instead of smooth movement
+
+**Cause:** NetworkTarget component missing or smoothing factor too high
+
+**Solution:**
+```csharp
+// Ensure entity has all required components
+repo.AddComponent(entity, new Position { ... });
+repo.AddComponent(entity, new PositionGeodetic { ... });
+repo.AddComponent(entity, new NetworkOwnership { ... });
+// NetworkTarget not required in BATCH-08.1 (simple lerp)
+```
+
+**Note:** BATCH-08.1 uses simple lerp. Future: true dead reckoning with velocity prediction.
+
+#### Problem: Owned entity geodetic not updating
+
+**Cause:** Entity not marked as owned
+
+**Solution:**
+```csharp
+var ownership = repo.GetComponentRO<NetworkOwnership>(entity);
+Debug.Assert(ownership.PrimaryOwnerId == ownership.LocalNodeId);
+```
+
+#### Problem: Coordinates inaccurate
+
+**Cause:** Entity too far from origin
+
+**Solution:**
+```csharp
+// Check distance
+var pos = repo.GetComponentRO<Position>(entity);
+float distance = pos.Value.Length();
+
+if (distance > 100_000)  // 100km
+{
+    Console.WriteLine($"Warning: Entity {distance}m from origin. Consider re-origin.");
+}
+```
+
+---
+
+### Integration with Network Gateway
+
+**Typical Flow (BATCH-07 + BATCH-08):**
+
+```
+Owned Entity:
+  1. Physics updates Position (local XYZ)
+  2. CoordinateTransformSystem → PositionGeodetic (network message)
+  3. EntityStateTranslator publishes PositionGeodetic to DDS
+  4. Network sends to remote nodes
+
+Remote Entity:
+  1. DDS receives PositionGeodetic from network
+  2. EntityStateTranslator updates component
+  3. NetworkSmoothingSystem → Position (smooth interpolation)
+  4. Rendering uses Position
+```
+
+**See Also:** [Distributed Ownership & Network Integration](#distributed-ownership--network-integration)
+
+---
+
+### API Reference
+
+For detailed API documentation, see:
+- `IGeographicTransform` interface
+- `WGS84Transform` implementation
+- `CoordinateTransformSystem`
+- `NetworkSmoothingSystem`
+- `GeographicTransformModule`
+
+**Full API:** [API Reference - Geographic Transform Services](API-REFERENCE.md#geographic-transform-services)
+
+---
+
 **Version 2.0 - January 2026**  
 **For questions or clarifications, see: [Design Implementation Plan](DESIGN-IMPLEMENTATION-PLAN.md)**

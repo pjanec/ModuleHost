@@ -2040,4 +2040,492 @@ var pos = view.GetComponentRO<Position>(target);
 
 ---
 
-*Last Updated: January 4, 2026*
+## Geographic Transform Services
+
+**Namespace:** `ModuleHost.Core.Geographic`  
+**Assembly:** ModuleHost.Core.dll  
+**Added:** BATCH-08 (January 2026)
+
+Bridge between FDP's local Cartesian physics and global WGS84 geodetic coordinates for network interoperability.
+
+---
+
+### IGeographicTransform
+
+Abstract interface for coordinate transformation.
+
+```csharp
+public interface IGeographicTransform
+{
+    void SetOrigin(double latitudeDeg, double longitudeDeg, double altitudeMeters);
+    Vector3 ToCartesian(double latitudeDeg, double longitudeDeg, double altitudeMeters);
+    (double lat, double lon, double alt) ToGeodetic(Vector3 localPosition);
+}
+```
+
+#### SetOrigin
+
+```csharp
+void SetOrigin(double latitudeDeg, double longitudeDeg, double altitudeMeters)
+```
+
+Sets the origin point for the local tangent plane coordinate system.
+
+**Parameters:**
+- `latitudeDeg` - Latitude in degrees (-90 to 90)
+- `longitudeDeg` - Longitude in degrees (-180 to 180)
+- `altitudeMeters` - Altitude in meters above WGS84 ellipsoid
+
+**Throws:**
+- `ArgumentOutOfRangeException` - If latitude outside valid range
+
+**Example:**
+```csharp
+var transform = new WGS84Transform();
+transform.SetOrigin(37.7749, -122.4194, 0);  // San Francisco
+```
+
+**Important:** Choose origin near simulation center. Accuracy degrades beyond ~100km.
+
+#### ToCartesian
+
+```csharp
+Vector3 ToCartesian(double latitudeDeg, double longitudeDeg, double altitudeMeters)
+```
+
+Converts geodetic coordinates to local Cartesian (ENU tangent plane).
+
+**Parameters:**
+- `latitudeDeg` - Latitude in degrees
+- `longitudeDeg` - Longitude in degrees
+- `altitudeMeters` - Altitude in meters
+
+**Returns:** Local position (X=East, Y=North, Z=Up) in meters
+
+**Throws:**
+- `ArgumentOutOfRangeException` - If latitude outside valid range
+
+**Example:**
+```csharp
+var localPos = transform.ToCartesian(37.8, -122.42, 1000);
+// Returns Vector3 relative to origin
+```
+
+**Precision:**
+- Sub-centimeter within 10km
+- ~10cm within 100km
+- Degrades beyond 100km
+
+#### ToGeodetic
+
+```csharp
+(double lat, double lon, double alt) ToGeodetic(Vector3 localPosition)
+```
+
+Converts local Cartesian position to geodetic coordinates.
+
+**Parameters:**
+- `localPosition` - Local ENU position in meters
+
+**Returns:** Tuple of (latitude°, longitude°, altitude meters)
+
+**Example:**
+```csharp
+var (lat, lon, alt) = transform.ToGeodetic(new Vector3(100, 50, 10));
+Console.WriteLine($"Position: {lat:F6}°, {lon:F6}°, {alt:F1}m");
+```
+
+---
+
+### WGS84Transform
+
+Concrete implementation using WGS84 ellipsoid model.
+
+```csharp
+public class WGS84Transform : IGeographicTransform
+{
+    public void SetOrigin(double latitudeDeg, double longitudeDeg, double altitudeMeters);
+    public Vector3 ToCartesian(double latitudeDeg, double longitudeDeg, double altitudeMeters);
+    public (double lat, double lon, double alt) ToGeodetic(Vector3 localPosition);
+}
+```
+
+**Implementation Details:**
+- Uses double precision for ECEF calculations (prevents jitter)
+- ENU tangent plane aligned to origin latitude/longitude
+- 5-iteration ECEF→Geodetic conversion for accuracy
+- WGS84 constants: a=6,378,137m, f=1/298.257223563
+
+**Thread Safety:** Not thread-safe. Create one instance per thread or use locking.
+
+---
+
+### PositionGeodetic
+
+Managed component storing global geodetic coordinates.
+
+```csharp
+public class PositionGeodetic
+{
+    public double Latitude { get; set; }    // Degrees (-90 to 90)
+    public double Longitude { get; set; }   // Degrees (-180 to 180)
+    public double Altitude { get; set; }    // Meters above WGS84 ellipsoid
+}
+```
+
+**Usage:**
+```csharp
+repo.RegisterComponent<PositionGeodetic>();  // Managed component
+
+var entity = repo.CreateEntity();
+repo.AddComponent(entity, new PositionGeodetic
+{
+    Latitude = 37.7749,
+    Longitude = -122.4194,
+    Altitude = 100
+});
+```
+
+**Note:** Managed component (class) for double precision. Use `GetManagedComponentRO<>` / `SetManagedComponent<>`.
+
+---
+
+### CoordinateTransformSystem
+
+Synchronizes geodetic coordinates from physics for owned entities.
+
+```csharp
+[UpdateInPhase(SystemPhase.PostSimulation)]
+public class CoordinateTransformSystem : IModuleSystem
+{
+    public CoordinateTransformSystem(IGeographicTransform transform);
+    public void Execute(ISimulationView view, float deltaTime);
+}
+```
+
+#### Constructor
+
+```csharp
+public CoordinateTransformSystem(IGeographicTransform transform)
+```
+
+**Parameters:**
+- `transform` - Geographic transform service (injected)
+
+#### Execute
+
+Runs after physics, updates `PositionGeodetic` from `Position` for owned entities.
+
+**Query:**
+```csharp
+.With<Position>()
+.WithManaged<PositionGeodetic>()
+.With<NetworkOwnership>()
+```
+
+**Logic:**
+```
+For each entity:
+  IF PrimaryOwnerId == LocalNodeId:  // We own it
+    Read Position (physics)
+    Convert to geodetic
+    IF change > epsilon:  // 1e-6° or 0.1m
+      Update PositionGeodetic (for network)
+```
+
+**Example:**
+```csharp
+var transform = new WGS84Transform();
+transform.SetOrigin(37.7749, -122.4194, 0);
+
+var system = new CoordinateTransformSystem(transform);
+// Registered automatically by GeographicTransformModule
+```
+
+**Performance:** ~500 cycles per owned entity (iterative ECEF conversion)
+
+---
+
+### NetworkSmoothingSystem
+
+Interpolates remote entity positions from geodetic updates.
+
+```csharp
+[UpdateInPhase(SystemPhase.Input)]
+public class NetworkSmoothingSystem : IModuleSystem
+{
+    public NetworkSmoothingSystem(IGeographicTransform transform);
+    public void Execute(ISimulationView view, float deltaTime);
+}
+```
+
+#### Constructor
+
+```csharp
+public NetworkSmoothingSystem(IGeographicTransform transform)
+```
+
+**Parameters:**
+- `transform` - Geographic transform service (injected)
+
+#### Execute
+
+Runs before physics, smooths `Position` toward `PositionGeodetic` for remote entities.
+
+**Query:**
+```csharp
+.With<Position>()
+.WithManaged<PositionGeodetic>()
+.With<NetworkOwnership>()
+```
+
+**Logic:**
+```
+For each entity:
+  IF PrimaryOwnerId != LocalNodeId:  // Remote entity
+    Read PositionGeodetic (from network)
+    Convert to local Cartesian (target)
+    Lerp Position toward target (smoothing)
+    Update Position (for rendering)
+```
+
+**Smoothing Formula:**
+```csharp
+float t = Math.Clamp(deltaTime * 10.0f, 0f, 1f);
+Position.Value = Vector3.Lerp(currentPos, targetPos, t);
+```
+
+**Convergence:** ~0.1 seconds to reach target
+
+**Example:**
+```csharp
+var system = new NetworkSmoothingSystem(transform);
+// Runs every frame for smooth remote entity movement
+```
+
+**Performance:** ~200 cycles per remote entity (trig functions)
+
+---
+
+### GeographicTransformModule
+
+Module packaging both transform systems.
+
+```csharp
+public class GeographicTransformModule : IModule
+{
+    public GeographicTransformModule(
+        double originLatitudeDeg,
+        double originLongitudeDeg,
+        double originAltitudeMeters
+    );
+    
+    public string ModuleName { get; }
+    public Type[] GetRequiredComponents();
+    public void RegisterSystems(ISystemRegistry registry);
+    public void Tick(ISimulationView view, float deltaTime);
+}
+```
+
+#### Constructor
+
+```csharp
+public GeographicTransformModule(
+    double originLatitudeDeg,
+    double originLongitudeDeg,
+    double originAltitudeMeters
+)
+```
+
+**Parameters:**
+- `originLatitudeDeg` - Origin latitude (-90 to 90)
+- `originLongitudeDeg` - Origin longitude (-180 to 180)
+- `originAltitudeMeters` - Origin altitude (meters)
+
+**Example:**
+```csharp
+var geoModule = new GeographicTransformModule(
+    latitudeDeg: 37.7749,    // San Francisco
+    longitudeDeg: -122.4194,
+    altitudeMeters: 0
+);
+
+kernel.RegisterModule(geoModule);
+```
+
+#### RegisterSystems
+
+Registers both systems with the module host.
+
+```csharp
+public void RegisterSystems(ISystemRegistry registry)
+{
+    registry.RegisterSystem(new NetworkSmoothingSystem(_transform));    // Input phase
+    registry.RegisterSystem(new CoordinateTransformSystem(_transform)); // PostSim phase
+}
+```
+
+**Execution Order:**
+1. Input: NetworkSmoothingSystem (remote entities)
+2. Simulation: Physics/game logic
+3. PostSimulation: CoordinateTransformSystem (owned entities)
+
+#### Tick
+
+Executes both systems in sequence.
+
+```csharp
+public void Tick(ISimulationView view, float deltaTime)
+```
+
+**Internal:** Calls Execute() on both systems in registration order.
+
+---
+
+### Usage Examples
+
+#### Complete Setup
+
+```csharp
+using Fdp.Kernel;
+using ModuleHost.Core;
+using ModuleHost.Core.Geographic;
+using ModuleHost.Core.Network;
+
+// 1. Create kernel
+var kernel = new ModuleHostKernel();
+
+// 2. Register components
+kernel.Repository.RegisterComponent<Position>();
+kernel.Repository.RegisterComponent<NetworkOwnership>();
+kernel.Repository.RegisterComponent<PositionGeodetic>();  // Managed
+
+// 3. Add geographic module
+var geoModule = new GeographicTransformModule(
+    originLatitudeDeg: 37.7749,
+    originLongitudeDeg: -122.4194,
+    originAltitudeMeters: 0
+);
+kernel.RegisterModule(geoModule);
+
+// 4. Use it
+var entity = kernel.Repository.CreateEntity();
+
+kernel.Repository.AddComponent(entity, new Position
+{
+    Value = new Vector3(100, 0, 50)  // 100m east, 50m up
+});
+
+kernel.Repository.AddComponent(entity, new PositionGeodetic
+{
+    Latitude = 37.7749,
+    Longitude = -122.4194,
+    Altitude = 50
+});
+
+kernel.Repository.AddComponent(entity, new NetworkOwnership
+{
+    LocalNodeId = 1,
+    PrimaryOwnerId = 1  // We own it
+});
+
+// Systems will automatically sync coordinates
+```
+
+####  Owned vs Remote
+
+```csharp
+// Owned entity: Position → PositionGeodetic (physics drives network)
+var ownedEntity = repo.CreateEntity();
+repo.AddComponent(ownedEntity, new Position { Value = Vector3.Zero });
+repo.AddComponent(ownedEntity, new PositionGeodetic());
+repo.AddComponent(ownedEntity, new NetworkOwnership
+{
+    LocalNodeId = 1,
+    PrimaryOwnerId = 1  // We control physics
+});
+
+// CoordinateTransformSystem updates PositionGeodetic each frame
+
+// Remote entity: PositionGeodetic → Position (network drives rendering)
+var remoteEntity = repo.CreateEntity();
+repo.AddComponent(remoteEntity, new Position { Value = Vector3.Zero });
+repo.AddComponent(remoteEntity, new PositionGeodetic
+{
+    Latitude = 37.8,
+    Longitude = -122.42,
+    Altitude = 100
+});
+repo.AddComponent(remoteEntity, new NetworkOwnership
+{
+    LocalNodeId = 1,
+    PrimaryOwnerId = 2  // Node 2 controls physics
+});
+
+// NetworkSmoothingSystem interpolates Position each frame
+```
+
+#### Manual Conversion
+
+```csharp
+// For debugging or custom logic
+var transform = new WGS84Transform();
+transform.SetOrigin(37.7749, -122.4194, 0);
+
+// Geodetic → Local
+var localPos = transform.ToCartesian(37.8, -122.42, 1000);
+Console.WriteLine($"Local: {localPos}");  // Vector3 in meters
+
+// Local → Geodetic
+var (lat, lon, alt) = transform.ToGeodetic(new Vector3(1000, 500, 100));
+Console.WriteLine($"Geodetic: {lat:F6}°, {lon:F6}°, {alt:F1}m");
+```
+
+---
+
+### Performance Characteristics
+
+**CoordinateTransformSystem:**
+- Runs: PostSimulation phase (once per frame)
+- Cost: ~500 cycles per owned entity
+- Optimization: Skips if change < epsilon (1e-6° or 0.1m)
+- Future: Add dirty checking (`HasComponentChanged<Position>`)
+
+**NetworkSmoothingSystem:**
+- Runs: Input phase (once per frame)
+- Cost: ~200 cycles per remote entity
+- Smoothing: Lerp convergence over ~0.1s
+
+**Total for 200 Networked Entities:**
+- 100 owned + 100 remote
+- ~70,000 cycles/frame
+- ~0.023ms @ 3GHz
+- Negligible overhead
+
+---
+
+### Integration with Network Gateway
+
+**Outbound (Owned Entity):**
+```
+1. Physics updates Position
+2. CoordinateTransformSystem → PositionGeodetic
+3. EntityStateTranslator reads PositionGeodetic
+4. Publishes to DDS network
+```
+
+**Inbound (Remote Entity):**
+```
+1. DDS receives EntityStateDescriptor
+2. EntityStateTranslator updates PositionGeodetic
+3. NetworkSmoothingSystem → Position (interpolated)
+4. Rendering uses Position
+```
+
+**See Also:**
+- [Distributed Ownership & Network Integration](FDP-ModuleHost-User-Guide.md#distributed-ownership--network-integration)
+- [Geographic Transform Services](FDP-ModuleHost-User-Guide.md#geographic-transform-services)
+
+---
+
+*Last Updated: January 8, 2026*
