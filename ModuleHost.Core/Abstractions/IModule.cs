@@ -59,6 +59,13 @@ namespace ModuleHost.Core.Abstractions
         /// </summary>
         IReadOnlyList<Type>? WatchEvents => null;
         
+        /// <summary>
+        /// Components this module reads. Used for convoy snapshot filtering.
+        /// Returning null or empty defaults to ALL components (safe but inefficient).
+        /// </summary>
+        /// <returns>Component types required by this module, or null for all</returns>
+        IEnumerable<Type>? GetRequiredComponents() => null;
+        
         // ============================================================
         // DEPRECATED (Kept for backward compatibility)
         // ============================================================

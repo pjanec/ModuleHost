@@ -11,6 +11,15 @@ public class AIModule : IModule
     public ModuleTier Tier => ModuleTier.Slow;
     public int UpdateFrequency => 6; // 10 Hz
     
+    public IEnumerable<Type> GetRequiredComponents()
+    {
+        yield return typeof(Position);
+        yield return typeof(AIState);
+        yield return typeof(Health);
+        yield return typeof(Velocity);
+        yield return typeof(Damage); 
+    }
+    
     public void Tick(ISimulationView view, float deltaTime)
     {
         var cmd = view.GetCommandBuffer();

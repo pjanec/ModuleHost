@@ -15,6 +15,13 @@ public class PhysicsModule : IModule
     public ModuleTier Tier => ModuleTier.Fast;
     public int UpdateFrequency => 1; // Every frame
     
+    public IEnumerable<Type> GetRequiredComponents()
+    {
+        yield return typeof(Position);
+        yield return typeof(Damage);
+        yield return typeof(Health);
+    }
+    
     private const float CollisionRadius = 1.0f;
     private const float CollisionRadiusSq = CollisionRadius * CollisionRadius;
     

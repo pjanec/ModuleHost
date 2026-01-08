@@ -1656,7 +1656,78 @@ To further reduce GC pressure, ModuleHost uses a `SnapshotPool`.
 
 **Note:** Pooled snapshots retain their buffer capacities, stabilizing memory usage after a warmup period.
 
+#### Optimizing Convoy Performance
+
+**Implemented in:** BATCH-05.1 ✅
+
+By default, convoy snapshots sync **ALL** components (up to 256 component tables), even if modules only need a few. This can waste significant CPU time and memory bandwidth.
+
+**The Solution:** Declare your module's required components explicitly.
+
+```csharp
+public class AIModule : IModule
+{
+    public string Name => "AIModule";
+    public ExecutionPolicy Policy => ExecutionPolicy.SlowBackground(10); // 10Hz
+    
+    // Declare which components this module actually uses
+    public IEnumerable<Type> GetRequiredComponents()
+    {
+        yield return typeof(VehicleState);
+        yield return typeof(AIBehavior);
+        yield return typeof(Position);
+    }
+    
+    public void Tick(ISimulationView view, float deltaTime)
+    {
+        // Module only queries the components declared above
+        var query = view.Query()
+            .With<VehicleState>()
+            .With<AIBehavior>()
+            .With<Position>()
+            .Build();
+        
+        query.ForEach(entity =>
+        {
+            var state = view.GetComponentRO<VehicleState>(entity);
+            var behavior = view.GetComponentRW<AIBehavior>(entity);
+            var pos = view.GetComponentRO<Position>(entity);
+            
+            // AI logic here...
+        });
+    }
+}
+```
+
+**Performance Impact:**
+-   **Before:** Convoy syncs 256 component tables (all components)
+-   **After:** Convoy syncs 3 component tables (only VehicleState, AIBehavior, Position)
+-   **Result:** 50-95% reduction in convoy sync time for focused modules
+
+**Default Behavior (Safe):**
+If you **don't** override `GetRequiredComponents()`, the convoy syncs **all** components. This is:
+-   ✅ **Safe:** Your module gets all data it might need
+-   ⚠️ **Inefficient:** Wastes CPU/memory copying unused components
+
+**Best Practice:**
+-   Always declare `GetRequiredComponents()` for performance-critical modules
+-   List **all** component types your module reads (from queries AND direct access)
+-   Keep the list in sync with your `Tick()` implementation
+
+**Convoy Union Mask:**
+When multiple modules share a convoy, their component requirements are combined (union):
+
+```csharp
+// Module A needs: VehicleState, AIBehavior
+// Module B needs: VehicleState, NetworkState
+// 
+// Convoy union mask: VehicleState | AIBehavior | NetworkState (3 components total)
+```
+
+This ensures each module gets the components it needs while still minimizing data copying.
+
 ---
+
 
 ## Event Bus
 

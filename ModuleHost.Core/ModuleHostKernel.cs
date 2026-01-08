@@ -100,7 +100,7 @@ namespace ModuleHost.Core
             if (modulesNeedingProvider.Count == 0)
                 return;
             
-            // Validate policies first
+            // Validate policies AND Cache component masks
             foreach (var entry in modulesNeedingProvider)
             {
                 try
@@ -112,6 +112,9 @@ namespace ModuleHost.Core
                     throw new InvalidOperationException(
                         $"Module '{entry.Module.Name}' has invalid execution policy: {ex.Message}", ex);
                 }
+                
+                // Cache component mask for optimization
+                entry.ComponentMask = GetComponentMask(entry.Module);
             }
             
             // Group by execution characteristics
@@ -132,20 +135,9 @@ namespace ModuleHost.Core
                 {
                     case DataStrategy.Direct:
                         // No provider needed - direct world access
-                        // (modules run on main thread)
                         foreach (var entry in moduleList)
                         {
-                            entry.Provider = null!; // Explicit null (handled in Update? Direct modules usually don't need provider lookup)
-                            // NOTE: Direct modules don't use AcquireView/ReleaseView, they run synchronously.
-                            // But Update loop iterates _modules to call Provider.Update().
-                            // Direct modules should have NO provider assigned.
-                            // However, RegisterModule assigns provider=null.
-                            // We should handle Provider == null in Update logic if needed.
-                            // Currently Update calls entry.Provider.Update() for all modules.
-                            // If Provider is null, it crashes.
-                            // So Direct modules either need a "NullProvider" or we check null.
-                            // Task 5.3 says "Direct strategy: no provider assigned".
-                            // I will check Update() method.
+                            entry.Provider = null!; 
                         }
                         break;
                     
@@ -171,7 +163,8 @@ namespace ModuleHost.Core
                         {
                             // Single module: OnDemandProvider
                             var entry = moduleList[0];
-                            var mask = GetComponentMask(entry.Module);
+                            // Use cached mask
+                            var mask = entry.ComponentMask;
                             
                             entry.Provider = new OnDemandProvider(
                                 _liveWorld,
@@ -208,7 +201,23 @@ namespace ModuleHost.Core
                 if (entry.Provider == null && entry.Module.Policy.Strategy != DataStrategy.Direct)
                 {
                     // Fallback (should not happen if logic covers all cases)
-                     var mask = GetComponentMask(entry.Module);
+                    // If we missed caching for some reason (e.g. manually added?) - recalculate or use cache?
+                    // Safe to call GetComponentMask again if cache is empty, but we set it above.
+                    // But if module was NOT in modulesNeedingProvider (already had provider), we skipped loop.
+                    // But then provider is not null.
+                    
+                    // What if provider set manually but we want to optimize?
+                    // We only touch modulesNeedingProvider.
+                    
+                    if (entry.ComponentMask.IsEmpty() && !entry.Module.Policy.Strategy.ToString().Contains("Direct")) 
+                    {
+                         // If mask not set, compute it. 
+                         // Note: IsEmpty() might be expensive or ambiguous (0 components required).
+                         // But we can just call GetComponentMask, it's safe.
+                         entry.ComponentMask = GetComponentMask(entry.Module);
+                    }
+                    
+                     var mask = entry.ComponentMask;
                      entry.Provider = new OnDemandProvider(_liveWorld, _eventAccumulator, mask, _schemaSetup);
                 }
             }
@@ -220,8 +229,7 @@ namespace ModuleHost.Core
             
             foreach (var entry in modules)
             {
-                var moduleMask = GetComponentMask(entry.Module);
-                unionMask.BitwiseOr(moduleMask);
+                unionMask.BitwiseOr(entry.ComponentMask);
             }
             
             return unionMask;
@@ -229,12 +237,41 @@ namespace ModuleHost.Core
 
         private BitMask256 GetComponentMask(IModule module)
         {
-            // Helper to get component requirements from module
-            // This might need module API enhancement (could return all for now)
-            // For BATCH-03, we return ALL components (default conservative behavior)
+            var requiredComponents = module.GetRequiredComponents();
+            
+            // Default: sync all components (conservative)
+            if (requiredComponents == null || !requiredComponents.Any())
+            {
+                return CreateFullMask();
+            }
+            
+            // Optimized: sync only required components
             var mask = new BitMask256();
-            for(int i=0; i<256; i++) mask.SetBit(i);
-            return mask; 
+            foreach (var componentType in requiredComponents)
+            {
+                int typeId = ComponentTypeRegistry.GetId(componentType);
+                if (typeId >= 0 && typeId < 256)
+                {
+                    mask.SetBit(typeId);
+                }
+                else
+                {
+                    // Log warning: Component type not registered
+                    Console.WriteLine($"Warning: Module '{module.Name}' requires unregistered component: {componentType.Name}");
+                }
+            }
+            
+            return mask;
+        }
+        
+        private BitMask256 CreateFullMask()
+        {
+            var mask = new BitMask256();
+            for (int i = 0; i < 256; i++)
+            {
+                mask.SetBit(i);
+            }
+            return mask;
         }
 
         /// <summary>
@@ -673,6 +710,9 @@ namespace ModuleHost.Core
             public ISimulationView? LeasedView { get; set; }
             public float AccumulatedDeltaTime { get; set; }
             public uint LastRunTick { get; set; }  // For reactive scheduling prep
+            
+            // Caching
+            public BitMask256 ComponentMask; 
             
             // NEW for BATCH-04: Resilience
             public ModuleCircuitBreaker? CircuitBreaker { get; set; }

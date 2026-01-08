@@ -682,32 +682,22 @@ public interface IModule
     string Name { get; }
     
     /// <summary>
-    /// Module execution tier (Fast or Slow).
+    /// Execution policy defining how and when this module runs.
+    /// Replaces Tier and UpdateFrequency.
     /// </summary>
-    ModuleTier Tier { get; }
+    ExecutionPolicy Policy { get; }
+
+    /// <summary>
+    /// Optional: Components this module reads. 
+    /// Used to optimize convoy snapshot synchronization.
+    /// Returns null to sync ALL components (default).
+    /// </summary>
+    IEnumerable<Type>? GetRequiredComponents() { get; }
     
     /// <summary>
-    /// Update frequency in frames.
+    /// Optional: Events this module watches for reactive scheduling.
     /// </summary>
-    int UpdateFrequency { get; }
-    
-    /// <summary>
-    /// Maximum expected runtime in ms before timeout behavior.
-    /// Default: 100ms
-    /// </summary>
-    int MaxExpectedRuntimeMs { get; }
-    
-    /// <summary>
-    /// Consecutive failures before circuit breaker opens.
-    /// Default: 3
-    /// </summary>
-    int FailureThreshold { get; }
-    
-    /// <summary>
-    /// Recovery timeout in ms for open circuit.
-    /// Default: 5000ms
-    /// </summary>
-    int CircuitResetTimeoutMs { get; }
+    IReadOnlyList<Type>? WatchEvents { get; }
     
     /// <summary>
     /// Register systems for this module.
@@ -718,6 +708,25 @@ public interface IModule
     /// Main execution method.
     /// </summary>
     void Tick(ISimulationView view, float deltaTime);
+
+    // ==========================================
+    // DEPRECATED (Kept for backward compatibility)
+    // ==========================================
+    
+    [Obsolete("Use Policy.Mode instead")]
+    ModuleTier Tier { get; }
+    
+    [Obsolete("Use Policy.TargetFrequencyHz instead")]
+    int UpdateFrequency { get; }
+    
+    [Obsolete("Use Policy.MaxExpectedRuntimeMs instead")]
+    int MaxExpectedRuntimeMs { get; }
+    
+    [Obsolete("Use Policy.FailureThreshold instead")]
+    int FailureThreshold { get; }
+    
+    [Obsolete("Use Policy.CircuitResetTimeoutMs instead")]
+    int CircuitResetTimeoutMs { get; }
 }
 ```
 
