@@ -4193,7 +4193,626 @@ protected override void OnUpdate()
 
 ---
 
+## Modules & ModuleHost
+
+### Overview
+
+**Modules** are self-contained units of simulation logic in the ModuleHost architecture. They encapsulate related functionality and can execute either through registered systems or directly.
+
+**Key Concepts:**
+- `IModule` interface defines the contract
+- Two execution patterns: System-based (recommended) or Direct execution
+- Modules can run synchronously, at reduced frequency, or asynchronously
+- Reactive scheduling based on component changes or events
+
+---
+
+### The IModule Interface
+
+```csharp
+public interface IModule
+{
+    // Identity
+    string Name { get; }
+    
+    // How it runs
+    ExecutionPolicy Policy { get; }
+    
+    // Registration (optional - for system-based modules)
+    void RegisterSystems(ISystemRegistry registry);
+    
+    // Execution (required)
+    void Tick(ISimulationView view, float deltaTime);
+    
+    // Reactive scheduling (optional)
+    IReadOnlyList<Type>? WatchComponents { get; }
+    IReadOnly List<Type>? WatchEvents { get; }
+    
+    // Snapshot optimization (optional)
+    IEnumerable<Type>? GetRequiredComponents();
+}
+```
+
+---
+
+### Two Execution Patterns
+
+#### Pattern 1: System-Based Modules (Recommended)
+
+**When to use:**
+- Multiple subsystems with different execution phases
+- Need phase-specific logic (Input, Simulation, PostSimulation)
+- Want better testability and separation of concerns
+- Using reactive scheduling
+
+**How it works:**
+1. Implement `RegisterSystems()` to register `IModuleSystem` instances
+2. Systems tagged with `[UpdateInPhase(phase)]` execute in phase order
+3. Leave `Tick()` empty (or use for post-system coordination)
+4. Kernel automatically executes systems
+
+**Example:**
+```csharp
+using ModuleHost.Core.Abstractions;
+using ModuleHost.Core.Geographic;
+
+public class GeographicTransformModule : IModule
+{
+    public string Name => "GeographicTransform";
+    public ExecutionPolicy Policy => ExecutionPolicy.Synchronous();
+    
+    private readonly IGeographicTransform _transform;
+    private readonly List<IModuleSystem> _systems = new();
+    
+    public GeographicTransformModule(double lat, double lon, double alt)
+    {
+        _transform = new WGS84Transform();
+        _transform.SetOrigin(lat, lon, alt);
+    }
+    
+    public void RegisterSystems(ISystemRegistry registry)
+    {
+        // Input phase: Smooth remote entities
+        registry.RegisterSystem(new NetworkSmoothingSystem(_transform));
+        
+        // PostSimulation phase: Sync owned entities
+        registry.RegisterSystem(new CoordinateTransformSystem(_transform));
+    }
+    
+    public void Tick(ISimulationView view, float deltaTime)
+    {
+        // Empty - kernel executes systems in phase order
+        
+        // OR: Optional coordination logic after systems complete
+        // _stats.TotalEntities = CountEntities(view);
+    }
+}
+```
+
+**Execution Flow:**
+```
+Frame Start
+  ↓
+[Input Phase]
+  → NetworkSmoothingSystem.Execute()  // Registered system
+  ↓
+[Simulation Phase]
+  → (Physics, game logic, etc.)
+  ↓
+[PostSimulation Phase]
+  → CoordinateTransformSystem.Execute()  // Registered system
+  ↓
+→ GeographicTransformModule.Tick()  // Module coordination (empty or stats)
+  ↓
+Frame End
+```
+
+**Benefits:**
+- ✅ Systems execute in correct phase order
+- ✅ Better testability (mock systems independently)
+- ✅ Cleaner separation of concerns
+- ✅ Supports reactive scheduling on systems
+- ✅ Framework handles execution
+
+---
+
+#### Pattern 2: Direct Execution Modules
+
+**When to use:**
+- Simple, self-contained module
+- Single responsibility, no subsystems
+- Don't need phase-specific execution
+- Legacy code or quick prototypes
+
+**How it works:**
+1. Implement all logic directly in `Tick()`
+2. `RegisterSystems()` remains empty (default implementation)
+3. Kernel calls `Tick()` after all system phases complete
+4. No phase control
+
+**Example:**
+```csharp
+public class SimpleStatsModule : IModule
+{
+    public string Name => "Statistics";
+    public ExecutionPolicy Policy => ExecutionPolicy.Synchronous();
+    
+    private EntityQuery _allEntities;
+    private int _frameCount;
+    
+    public SimpleStatsModule()
+    {
+        // No systems to register
+    }
+    
+    public void Tick(ISimulationView view, float deltaTime)
+    {
+        // All logic here - runs when kernel calls module.Tick()
+        
+        _frameCount++;
+        
+        if (_frameCount % 60 == 0)  // Every second
+        {
+            var entityCount = view.Query().Build().Count();
+            Console.WriteLine($"[Stats] Frame {_frameCount}, Entities: {entityCount}");
+        }
+    }
+}
+```
+
+**Execution Flow:**
+```
+Frame Start
+  ↓
+[All System Phases Execute]
+  → Input, Simulation, PostSimulation systems
+  ↓
+→ SimpleStatsModule.Tick()  // All module logic here
+  ↓
+Frame End
+```
+
+**Tradeoffs:**
+- ✅ Simpler for self-contained modules
+- ✅ Full control over execution
+- ❌ No phase-specific execution
+- ❌ Harder to test (monolithic Tick())
+- ❌ Can't benefit from reactive scheduling on subsystems
+
+---
+
+### Execution Policies
+
+Modules specify *how* and *when* they run via `ExecutionPolicy`:
+
+#### Synchronous (Main Thread, Every Frame)
+```csharp
+public ExecutionPolicy Policy => ExecutionPolicy.Synchronous();
+```
+
+**Use for:**
+- Critical systems (input, physics, rendering prep)
+- Fast operations (<1ms)
+- Systems that interact with main thread state
+
+**Characteristics:**
+- Runs on main thread
+- Every frame
+- Blocks simulation until complete
+
+---
+
+#### Frame-Synced (Main Thread, Reduced Rate)
+```csharp
+public ExecutionPolicy Policy => ExecutionPolicy.FrameSynced(targetHz: 30);
+```
+
+**Use for:**
+- Non-critical updates at reduced rate
+- Still needs main thread access
+- Example: UI updates, less frequent queries
+
+**Characteristics:**
+- Runs on main thread
+- At specified frequency (10Hz, 30Hz, etc.)
+- Synced to frame timing
+
+**Parameters:**
+- `targetHz`: Desired frequency (e.g., 30 for 30Hz)
+
+---
+
+#### Fast Replica (Convoy + Live Data)
+```csharp
+public ExecutionPolicy Policy => ExecutionPolicy.FastReplica();
+```
+
+**Use for:**
+- Modules needing live + snapshot data
+- Background processing with current state visibility
+- Complex queries over historical + current data
+
+**Characteristics:**
+- Runs on background thread
+- Receives snapshots (convoy) + live data access
+- Can run concurrently with simulation
+
+**Advanced:** See [Simulation Views & Execution Modes](#simulation-views--execution-modes)
+
+---
+
+#### Slow Background (Async, Reduced Rate)
+```csharp
+public ExecutionPolicy Policy => ExecutionPolicy.SlowBackground(targetHz: 10);
+```
+
+**Use for:**
+- Heavy computation (pathfinding, AI)
+- Infrequent updates
+- Non-blocking operations
+
+**Characteristics:**
+- Runs on background thread
+- At specified frequency
+- Works on snapshot data (eventually consistent)
+
+**Parameters:**
+- `targetHz`: Update frequency
+
+---
+
+### Reactive Scheduling
+
+Modules can opt into **reactive scheduling** to only execute when relevant changes occur.
+
+#### Watch Components
+```csharp
+public class UIModule : IModule
+{
+    // Only run when these components change
+    public IReadOnlyList<Type>? WatchComponents => new[]
+    {
+        typeof(Health),
+        typeof(DisplayName),
+        typeof(Position)
+    };
+    
+    public void Tick(ISimulationView view, float deltaTime)
+    {
+        // This only executes if Health, DisplayName, or Position changed this frame
+        UpdateUI(view);
+    }
+}
+```
+
+**Benefits:**
+- ❌ No wasted CPU on unchanged data
+- ✅ Event-driven updates
+- ✅ Automatically batches changes
+
+---
+
+#### Watch Events
+```csharp
+public class DamageModule : IModule
+{
+    // Only run when these events fire
+    public IReadOnlyList<Type>? WatchEvents => new[]
+    {
+        typeof(CollisionEvent),
+        typeof(ExplosionEvent)
+    };
+    
+    public void Tick(ISimulationView view, float deltaTime)
+    {
+        // Only executes if CollisionEvent or ExplosionEvent fired this frame
+        ProcessDamage(view);
+    }
+}
+```
+
+**Use Cases:**
+- Responding to game events
+- Entity lifecycle coordination (ConstructionAck, DestructionAck)
+- Trigger-based logic
+
+---
+
+### Snapshot Optimization (GetRequiredComponents)
+
+Background modules (FastReplica,SlowBackground) receive **snapshots** of simulation state. Specify required components to reduce snapshot size:
+
+```csharp
+public class PathfindingModule : IModule
+{
+    public ExecutionPolicy Policy => ExecutionPolicy.SlowBackground(10);
+    
+    //  Only need 3 components (not all 50+)
+    public IEnumerable<Type>? GetRequiredComponents() => new[]
+    {
+        typeof(Position),
+        typeof(NavTarget),
+        typeof(NavAgent)
+    };
+    
+    public void Tick(ISimulationView view, float deltaTime)
+    {
+        // Snapshot only contains Position, NavTarget, NavAgent
+        // 95% smaller than full snapshot!
+        ComputePaths(view);
+    }
+}
+```
+
+**Performance Impact:**
+- 100 component types, module needs 5: **95% reduction**
+- Faster serialization
+- Less memory
+- Reduced convoy contention
+
+**Return Values:**
+- `null` or empty: Include ALL components (safe but large)
+- Specific types: Include only these (optimized)
+
+---
+
+### Module Lifecycle
+
+```
+1. Registration (Once)
+   kernel.RegisterModule(myModule)
+     ↓
+   myModule.RegisterSystems(registry)  // Collect systems
+         ↓
+   Systems stored in kernel registry
+
+2. Every Frame
+   kernel.Tick(deltaTime)
+     ↓
+   For each phase (Input, Simulation, PostSim, etc.):
+     ↓
+     Execute all [UpdateInPhase(phase)] systems
+     ↓
+   After all phases:
+     ↓
+     Call myModule.Tick(view, deltaTime)
+```
+
+---
+
+### Complete Example: Entity Lifecycle Module
+
+```csharp
+using System;
+using System.Collections.Generic;
+using ModuleHost.Core.Abstractions;
+using Fdp.Kernel;
+
+/// <summary>
+/// Coordinates entity construction/destruction across distributed modules.
+/// Pattern: System-based + reactive scheduling
+/// </summary>
+public class EntityLifecycleModule : IModule
+{
+    public string Name => "EntityLifecycleManager";
+    
+    // Synchronous - critical for entity coordination
+    public ExecutionPolicy Policy => ExecutionPolicy.Synchronous();
+    
+    // Reactive: Only run when ACK events fire
+    public IReadOnlyList<Type>? WatchEvents => new[]
+    {
+        typeof(ConstructionAck),
+        typeof(DestructionAck)
+    };
+    
+    private readonly HashSet<int> _participatingModuleIds;
+    private readonly Dictionary<Entity, PendingConstruction> _pending = new();
+    
+    public EntityLifecycleModule(IEnumerable<int> moduleIds)
+    {
+        _participatingModuleIds = new HashSet<int>(moduleIds);
+    }
+    
+    public void RegisterSystems(ISystemRegistry registry)
+    {
+        // Register system to process ACKs
+        registry.RegisterSystem(new LifecycleSystem(this));
+    }
+    
+    public void Tick(ISimulationView view, float deltaTime)
+    {
+        // Coordination logic after system executes
+        // Could gather statistics, check timeouts, etc.
+    }
+    
+    // Public API for creating entities
+    public void BeginConstruction(Entity entity, int typeId, uint frame, IEntityCommandBuffer cmd)
+    {
+        _pending[entity] = new PendingConstruction
+        {
+            Entity = entity,
+            StartFrame = frame,
+            RemainingAcks = new HashSet<int>(_participatingModuleIds)
+        };
+        
+        cmd.PublishEvent(new ConstructionOrder { Entity = entity, TypeId = typeId });
+    }
+}
+
+[UpdateInPhase(SystemPhase.PostSimulation)]
+public class LifecycleSystem : IModuleSystem
+{
+    private readonly EntityLifecycleModule _module;
+    
+    public LifecycleSystem(EntityLifecycleModule module)
+    {
+        _module = module;
+    }
+    
+    public void Execute(ISimulationView view, float deltaTime)
+    {
+        // Process ACKs accumulated this frame
+        var acks = view.GetEventsOf<ConstructionAck>();
+        foreach (var ack in acks)
+        {
+            _module.ProcessConstructionAck(ack);
+        }
+    }
+}
+```
+
+**Why System-Based:**
+- LifecycleSystem runs in PostSimulation phase (after entities created)
+- Reactive scheduling: Only runs when ACK events fire
+- Module provides public API, system handles execution
+- Testable: Can mock LifecycleSystem independently
+
+---
+
+### Best Practices
+
+#### ✅ DO: Use System-Based for Complex Modules
+```csharp
+// Complex module with multiple phases
+public class NetworkModule : IModule
+{
+    public void RegisterSystems(ISystemRegistry registry)
+    {
+        registry.RegisterSystem(new NetworkIngressSystem());   // Input phase
+        registry.RegisterSystem(new NetworkEgressSystem());    // PostSim phase
+    }
+}
+```
+
+#### ✅ DO: Use Reactive Scheduling
+```csharp
+// Avoid running every frame unnecessarily
+public IReadOnlyList<Type>? WatchComponents => new[] { typeof(Health) };
+```
+
+#### ✅ DO: Optimize Snapshots
+```csharp
+// Background modules: Specify required components
+public IEnumerable<Type>? GetRequiredComponents() => new[] 
+{ 
+    typeof(Position), 
+    typeof(Velocity) 
+};
+```
+
+#### ✅ DO: Choose Appropriate Policy
+```csharp
+// Critical: Synchronous
+public ExecutionPolicy Policy => ExecutionPolicy.Synchronous();
+
+// Heavy computation: Background
+public ExecutionPolicy Policy => ExecutionPolicy.SlowBackground(10);
+```
+
+#### ⚠️ DON'T: Mix Patterns Unnecessarily
+```csharp
+// ❌ BAD: Register systems AND implement logic in Tick()
+public void RegisterSystems(ISystemRegistry registry)
+{
+    registry.RegisterSystem(new MySystem());
+}
+
+public void Tick(ISimulationView view, float deltaTime)
+{
+    // Also doing work here - confusing!
+    DoSomethingElse();
+}
+
+// ✅ GOOD: Choose one pattern
+public void Tick(ISimulationView view, float deltaTime)
+{
+    // Empty -systems handle everything
+}
+```
+
+#### ⚠️ DON'T: Use Direct Execution for Phase-Sensitive Logic
+```csharp
+// ❌ BAD: Tick() runs AFTER all phases
+public void Tick(ISimulationView view, float deltaTime)
+{
+    // This runs LATE - after PostSimulation phase!
+    // If you need Input phase logic, use a system
+}
+
+// ✅ GOOD: Use system with phase attribute
+[UpdateInPhase(SystemPhase.Input)]
+public class MySystem : IModuleSystem { /* ... */ }
+```
+
+---
+
+### Troubleshooting
+
+#### Problem: Systems not executing
+
+**Check:**
+1. Did you call `registry.RegisterSystem()`?
+2. Does kernel support auto-executing registered systems?
+3. If not, execute manually in `Tick()`:
+
+```csharp
+public void Tick(ISimulationView view, float deltaTime)
+{
+    foreach (var system in _systems)
+    {
+        system.Execute(view, deltaTime);
+    }
+}
+```
+
+---
+
+#### Problem: Module running too often
+
+**Solution:** Use reactive scheduling:
+```csharp
+public IReadOnlyList<Type>? WatchComponents => new[] { typeof(Health) };
+```
+
+Or reduce frequency:
+```csharp
+public ExecutionPolicy Policy => ExecutionPolicy.FrameSynced(30);  // 30Hz instead of 60Hz
+```
+
+---
+
+#### Problem: Background module seeing stale data
+
+**Expected:** Background modules work on snapshots (eventually consistent)
+
+**Solutions:**
+1. Use `FastReplica` if you need current data:
+   ```csharp
+   public ExecutionPolicy Policy => ExecutionPolicy.FastReplica();
+   ```
+
+2. Or accept staleness for heavy computation:
+   ```csharp
+   public ExecutionPolicy Policy => ExecutionPolicy.SlowBackground(10);  // May be 1-2 frames behind
+   ```
+
+---
+
+### API Reference
+
+For detailed API documentation, see:
+- `IModule` interface (ModuleHost.Core.Abstractions)
+- `IModuleSystem` interface
+- `ExecutionPolicy` class
+- `ISystemRegistry` interface
+
+**Full API:** [API Reference - Module Framework](API-REFERENCE.md#module-framework)
+
+---
+
 ## Geographic Transform Services
+
 
 ### Overview
 

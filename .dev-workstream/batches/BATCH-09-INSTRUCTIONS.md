@@ -61,6 +61,10 @@ The PLL algorithm provides smooth, low-latency synchronization while lockstep pr
 ```csharp
 // File: ModuleHost.Core/Time/GlobalTime.cs (NEW)
 
+
+// WARNING!!! There might already be a GlobalTime struct in Fdp.Kernel namespace.
+//   Please unify the two - put the unified GlobalTime struct in Fdp.Kernel namespace only.
+
 using System;
 
 namespace ModuleHost.Core.Time
