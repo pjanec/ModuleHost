@@ -17,6 +17,7 @@ namespace ModuleHost.Core.Tests
             public string Name => "CommandModule";
             public ModuleTier Tier => ModuleTier.Fast; // Run every frame
             public int UpdateFrequency => 1;
+            public int MaxExpectedRuntimeMs => 1000;
             public bool DidRun { get; private set; }
             public Action<ISimulationView, IEntityCommandBuffer>? OnTick;
 

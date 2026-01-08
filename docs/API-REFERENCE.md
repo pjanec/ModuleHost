@@ -676,22 +676,48 @@ if (provider.TryUpdateReplica())
 ```csharp
 public interface IModule
 {
-    ModuleDefinition GetDefinition();
-    ComponentMask GetSnapshotRequirements();
-    EventTypeMask GetEventRequirements();
+    /// <summary>
+    /// Module name (for diagnostics and logging).
+    /// </summary>
+    string Name { get; }
     
-    void Initialize(IModuleContext context);
-    void Start();
-    void Stop();
+    /// <summary>
+    /// Module execution tier (Fast or Slow).
+    /// </summary>
+    ModuleTier Tier { get; }
     
+    /// <summary>
+    /// Update frequency in frames.
+    /// </summary>
+    int UpdateFrequency { get; }
+    
+    /// <summary>
+    /// Maximum expected runtime in ms before timeout behavior.
+    /// Default: 100ms
+    /// </summary>
+    int MaxExpectedRuntimeMs { get; }
+    
+    /// <summary>
+    /// Consecutive failures before circuit breaker opens.
+    /// Default: 3
+    /// </summary>
+    int FailureThreshold { get; }
+    
+    /// <summary>
+    /// Recovery timeout in ms for open circuit.
+    /// Default: 5000ms
+    /// </summary>
+    int CircuitResetTimeoutMs { get; }
+    
+    /// <summary>
+    /// Register systems for this module.
+    /// </summary>
     void RegisterSystems(ISystemRegistry registry);
     
-    JobHandle Tick(
-        FrameTime time,
-        ISimulationView view,  // ← Uses ISimulationView
-        ICommandBuffer commands);
-    
-    void DrawDiagnostics();
+    /// <summary>
+    /// Main execution method.
+    /// </summary>
+    void Tick(ISimulationView view, float deltaTime);
 }
 ```
 
@@ -701,57 +727,38 @@ public interface IModule
 ---
 
 #### Tick()
-
-```csharp
-JobHandle Tick(
-    FrameTime time,
-    ISimulationView view,
-    ICommandBuffer commands)
-```
-
-**Description:**  
-Main module logic executed asynchronously.
-
-**Parameters:**
-- `time` - Frame timing information
-- `view` - Read-only simulation view (GDB or SoD)
-- `commands` - Command buffer for writes
-
-**Returns:** `JobHandle` for async tracking
-
-**Contract:**
-- **Read from view** (never mutate!)
-- **Write via commands** (validated on playback)
-- **Return quickly** (respect MaxExpectedRuntimeMs)
-
-**Example:**
-```csharp
-public JobHandle Tick(
-    FrameTime time,
-    ISimulationView view,
-    ICommandBuffer commands)
-{
-    // Read state
-    var enemies = view.Query().With<Enemy>().Build();
-    
-    // Make decisions
-    foreach (var enemy in enemies)
-    {
-        var pos = view.GetComponentRO<Position>(enemy);
-        var health = view.GetComponentRO<Health>(enemy);
-        
-        if (health.Value < 30)
-        {
-            // Write command (not direct)
-            commands.SetComponent(enemy, new Orders {
-                Type = OrderType.Retreat
-            });
-        }
-    }
-    
-    return default;
-}
-```
+ 
+ ```csharp
+ void Tick(ISimulationView view, float deltaTime)
+ ```
+ 
+ **Description:**  
+ Main module logic executed asynchronously.
+ 
+ **Parameters:**
+ - `view` - Read-only simulation view covering the module's execution window
+ - `deltaTime` - Accumulated time delta since this module last ran (seconds)
+ 
+ **Contract:**
+ - **Read from view** (never mutate!)
+ - **No side effects** on shared state (thread safety)
+ - **Return quickly** (respect `MaxExpectedRuntimeMs`)
+ - **Use external CommandBuffer** (if available) or other thread-safe mechanism for output
+ 
+ **Example:**
+ ```csharp
+ public void Tick(ISimulationView view, float deltaTime)
+ {
+     // Read state
+     var enemies = view.Query().With<Enemy>().Build();
+     
+     foreach (var enemy in enemies)
+     {
+         var pos = view.GetComponentRO<Position>(enemy);
+         // ... logic ...
+     }
+ }
+ ```
 
 ---
 

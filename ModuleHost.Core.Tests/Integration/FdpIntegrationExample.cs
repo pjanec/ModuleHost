@@ -138,6 +138,8 @@ namespace ModuleHost.Core.Tests.Integration
             UpdateFrequency = frequency;
         }
         
+        public int MaxExpectedRuntimeMs => 1000;
+        
         public void Tick(ISimulationView view, float deltaTime)
         {
             TickCount++;

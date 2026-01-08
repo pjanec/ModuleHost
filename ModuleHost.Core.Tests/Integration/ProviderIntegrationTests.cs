@@ -1,3 +1,4 @@
+// File: ModuleHost.Core.Tests/Integration/ProviderIntegrationTests.cs
 using System;
 using Xunit;
 using Fdp.Kernel;
@@ -78,8 +79,9 @@ namespace ModuleHost.Core.Tests.Integration
             
             sodProvider.ReleaseView(sodView);
             
-            // Test Shared Provider
-            using var sharedProvider = new SharedSnapshotProvider(live, accumulator, mask, 2, schemaSetup);
+            // Test Shared Provider (UPDATED FOR BATCH 3)
+            var pool = new SnapshotPool(schemaSetup);
+            using var sharedProvider = new SharedSnapshotProvider(live, accumulator, mask, pool);
             var shared1 = sharedProvider.AcquireView();
             var shared2 = sharedProvider.AcquireView();
             Assert.Same(shared1, shared2); // Same snapshot

@@ -1,3 +1,4 @@
+// File: ModuleHost.Core.Tests/ProviderLeaseTests.cs
 using System;
 using ModuleHost.Core.Providers;
 using ModuleHost.Core.Abstractions;
@@ -11,6 +12,7 @@ namespace ModuleHost.Core.Tests
         private EntityRepository _liveWorld;
         private EventAccumulator _eventAccumulator;
         private BitMask256 _mask;
+        private SnapshotPool _pool;
 
         public ProviderLeaseTests()
         {
@@ -18,6 +20,7 @@ namespace ModuleHost.Core.Tests
             _eventAccumulator = new EventAccumulator();
             _mask = new BitMask256();
             for(int i=0; i<256; i++) _mask.SetBit(i);
+            _pool = new SnapshotPool(null);
         }
 
         [Fact]
@@ -57,7 +60,7 @@ namespace ModuleHost.Core.Tests
         [Fact]
         public void SharedSnapshotProvider_RefCount_IncrementsOnAcquire()
         {
-            var provider = new SharedSnapshotProvider(_liveWorld, _eventAccumulator, _mask, 1);
+            var provider = new SharedSnapshotProvider(_liveWorld, _eventAccumulator, _mask, _pool);
             
             var v1 = provider.AcquireView();
             var v2 = provider.AcquireView();
@@ -72,39 +75,49 @@ namespace ModuleHost.Core.Tests
         [Fact]
         public void SharedSnapshotProvider_ViewValidAcrossFrames_WithDetach()
         {
-            // Scenario: Async module holds view across Update()
-            var provider = new SharedSnapshotProvider(_liveWorld, _eventAccumulator, _mask, 1);
+            // Scenario: Async module holds view
+            // In new Convoy implementation, if one holds it, subsequent acquires get the SAME one.
+            // This test previously verified DETACH (splitting).
+            // We will update it to verify CONVOY (joining).
+            
+            var provider = new SharedSnapshotProvider(_liveWorld, _eventAccumulator, _mask, _pool);
             
             // Frame 1 acquire
             var v1 = provider.AcquireView();
             
-            // Frame 2 starts (Update called while v1 held - simulating busy state)
-            // Note: Update locks, checks leases. Since v1 held (count=1), it should detach.
+            // Frame 2 starts (Update called - empty now)
             provider.Update(); 
             
             _liveWorld.Tick(); // Advance live world
             
-            // Frame 2 acquires view (should be NEW/Different because old one detached)
+            // Frame 2 acquires view 
+            // Since v1 is still held (activeReaders=1), v2 should be SAME as v1 (joining the convoy)
             var v2 = provider.AcquireView();
             
-            Assert.NotSame(v1, v2);
+            Assert.Same(v1, v2);
             
             provider.ReleaseView(v1);
             provider.ReleaseView(v2);
+            
+            // Now fully released. Pool reuses instance.
+            var v3 = provider.AcquireView();
+            Assert.Same(v1, v3);
+            provider.ReleaseView(v3);
         }
 
         [Fact]
         public void SharedSnapshotProvider_ReusesIfReleased()
         {
-            var provider = new SharedSnapshotProvider(_liveWorld, _eventAccumulator, _mask, 1);
+            var provider = new SharedSnapshotProvider(_liveWorld, _eventAccumulator, _mask, _pool);
             
             var v1 = provider.AcquireView();
             provider.ReleaseView(v1); // Count = 0
             
-            provider.Update(); // Should reusing v1 (it is currentRecyclable and count=0)
+            provider.Update(); 
             
             var v2 = provider.AcquireView();
             
+            // Pool (Stack) behavior: Push v1, Pop v1.
             Assert.Same(v1, v2);
             
             provider.ReleaseView(v2);

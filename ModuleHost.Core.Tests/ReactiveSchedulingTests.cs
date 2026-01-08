@@ -1,4 +1,6 @@
+// File: ModuleHost.Core.Tests/ReactiveSchedulingTests.cs
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
 using Fdp.Kernel;
@@ -62,12 +64,12 @@ namespace ModuleHost.Core.Tests
             // 1. Update with small delta (50ms) -> Accumulated 50 < 100 -> No Run
             kernel.Update(0.050f);
             var stats = kernel.GetExecutionStats();
-            Assert.Equal(0, stats["MockModule"]);
+            Assert.Equal(0, stats.First(s => s.ModuleName == "MockModule").ExecutionCount);
 
             // 2. Update with more delta (60ms) -> Accumulated 110 > 100 -> Run
             kernel.Update(0.060f);
             stats = kernel.GetExecutionStats();
-            Assert.Equal(1, stats["MockModule"]); 
+            Assert.Equal(1, stats.First(s => s.ModuleName == "MockModule").ExecutionCount); 
         }
 
         [Fact]
@@ -89,16 +91,16 @@ namespace ModuleHost.Core.Tests
             // 1. No Event
             repo.Bus.SwapBuffers(); 
             kernel.Update(0.1f);
-            Assert.Equal(0, kernel.GetExecutionStats()["MockModule"]);
+            Assert.Equal(0, kernel.GetExecutionStats().First(s => s.ModuleName == "MockModule").ExecutionCount);
 
             // 2. Publish Event
             repo.Bus.Publish(new TestEvent{ X = 1 });
             kernel.Update(0.1f);
-            Assert.Equal(1, kernel.GetExecutionStats()["MockModule"]);
+            Assert.Equal(1, kernel.GetExecutionStats().First(s => s.ModuleName == "MockModule").ExecutionCount);
 
             // 3. No new event next frame
             kernel.Update(0.1f);
-            Assert.Equal(0, kernel.GetExecutionStats()["MockModule"]);
+            Assert.Equal(0, kernel.GetExecutionStats().First(s => s.ModuleName == "MockModule").ExecutionCount);
         }
 
         [Fact]
@@ -118,7 +120,7 @@ namespace ModuleHost.Core.Tests
 
             // 1. No changes
             kernel.Update(0.1f);
-            Assert.Equal(0, kernel.GetExecutionStats()["MockModule"]);
+            Assert.Equal(0, kernel.GetExecutionStats().First(s => s.ModuleName == "MockModule").ExecutionCount);
 
             // 2. Modify Component
             var e = repo.CreateEntity();
@@ -127,11 +129,11 @@ namespace ModuleHost.Core.Tests
             // Run Update
             kernel.Update(0.1f);
             
-            Assert.Equal(1, kernel.GetExecutionStats()["MockModule"]);
+            Assert.Equal(1, kernel.GetExecutionStats().First(s => s.ModuleName == "MockModule").ExecutionCount);
 
             // 3. No change next frame
             kernel.Update(0.1f);
-            Assert.Equal(0, kernel.GetExecutionStats()["MockModule"]);
+            Assert.Equal(0, kernel.GetExecutionStats().First(s => s.ModuleName == "MockModule").ExecutionCount);
         }
 
         [Fact]

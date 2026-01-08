@@ -18,6 +18,7 @@ namespace ModuleHost.Core.Tests.Integration
             public ModuleTier Tier => ModuleTier.Fast;
             public int UpdateFrequency => 1;
             public int TickCount { get; private set; }
+            public int MaxExpectedRuntimeMs => 1000;
             
             public void Tick(ISimulationView view, float deltaTime)
             {
@@ -41,6 +42,7 @@ namespace ModuleHost.Core.Tests.Integration
             public ModuleTier Tier => ModuleTier.Slow;
             public int UpdateFrequency => 6;
             public int TickCount { get; private set; }
+            public int MaxExpectedRuntimeMs => 1000;
             
             public void Tick(ISimulationView view, float deltaTime)
             {

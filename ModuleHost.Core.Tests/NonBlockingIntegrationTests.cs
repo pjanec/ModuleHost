@@ -37,7 +37,8 @@ namespace ModuleHost.Core.Tests
             public float LastDt = 0;
 
             public SlowModule(int sleepMs) { SleepMs = sleepMs; }
-
+            public int MaxExpectedRuntimeMs => 500;
+            
             public void Tick(ISimulationView view, float deltaTime)
             {
                 LastDt = deltaTime;
@@ -118,7 +119,7 @@ namespace ModuleHost.Core.Tests
              _kernel.Update(1.0f);
              
              // Wait for module to finish tick 1
-             await Task.Delay(150);
+             await Task.Delay(300);
              
              // Frame 4: Harvest (Tick 1 done). Dispatch Tick 2?
              // Tick 1 used dt=1.0.
@@ -129,7 +130,7 @@ namespace ModuleHost.Core.Tests
              _kernel.Update(1.0f);
              
              // Wait for Tick 2
-             await Task.Delay(150);
+             await Task.Delay(300);
              
              // Check slowMod.LastDt
              // Tick 1: LastDt = 1.0

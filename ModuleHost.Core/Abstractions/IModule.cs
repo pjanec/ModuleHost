@@ -47,6 +47,25 @@ namespace ModuleHost.Core.Abstractions
             : ModuleExecutionPolicy.DefaultSlow;
 
         /// <summary>
+        /// Maximum expected runtime for module execution in milliseconds.
+        /// If execution exceeds this, module is timed out and circuit breaker is triggered.
+        /// Default: 100ms
+        /// </summary>
+        int MaxExpectedRuntimeMs => 100;
+        
+        /// <summary>
+        /// Number of consecutive failures before circuit breaker opens.
+        /// Default: 3
+        /// </summary>
+        int FailureThreshold => 3;
+        
+        /// <summary>
+        /// Time in milliseconds before attempting recovery after circuit opens.
+        /// Default: 5000ms (5 seconds)
+        /// </summary>
+        int CircuitResetTimeoutMs => 5000;
+
+        /// <summary>
         /// Main module execution method.
         /// Called on background thread with read-only simulation view.
         /// 

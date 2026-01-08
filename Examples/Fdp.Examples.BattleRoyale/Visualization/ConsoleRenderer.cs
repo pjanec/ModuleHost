@@ -1,12 +1,14 @@
 namespace Fdp.Examples.BattleRoyale.Visualization;
 
+using ModuleHost.Core; // For ModuleStats
+
 public class ConsoleRenderer
 {
     private int _lastFrame = 0;
     private float _lastTime = 0;
     
     public void Render(int frame, float time, int entityCount, 
-        Dictionary<string, int> moduleExecutions)
+        List<ModuleStats> moduleExecutions)
     {
         // Removed Console.Clear() to prevent crash in non-interactive environment
         // Console.Clear(); 
@@ -15,8 +17,10 @@ public class ConsoleRenderer
         Console.WriteLine($"Entities: {entityCount}");
         Console.WriteLine("Module Executions (last second):");
         
-        foreach (var (module, count) in moduleExecutions.OrderByDescending(x => x.Value))
+        foreach (var stat in moduleExecutions.OrderByDescending(x => x.ExecutionCount))
         {
+            var count = stat.ExecutionCount;
+            var module = stat.ModuleName;
             var tier = count >= 59 ? "[FAST]" : "[SLOW]"; // >= 59 allows for slight off-by-one or startup
             Console.WriteLine($"  {tier} {module,-20} : {count,3} ticks");
         }

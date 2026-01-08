@@ -1128,6 +1128,33 @@ public class PathfindingModule : IModule
 
 ---
 
+### Resilience & Safety
+
+ModuleHost includes built-in mechanisms to protect the simulation from faulty modules.
+
+#### Circuit Breaker Pattern
+
+Each module is protected by a **Circuit Breaker** that monitors its health.
+- **Failures**: Exceptions or Timeouts count as failures.
+- **Threshold**: If failures exceed `FailureThreshold` (default: 3), the circuit **Opens**.
+- **Open State**: The module is disabled (not executed) for `CircuitResetTimeoutMs` (default: 5000ms).
+- **Half-Open**: After the timeout, the module runs ONCE on probation. Success resets the circuit; Failure keeps it open.
+
+#### Handling Timeouts & Zombie Tasks
+
+If a module exceeds `MaxExpectedRuntimeMs`, the ModuleHost considers it "timed out".
+**IMPORTANT**: The .NET runtime does not allow safely "killing" a thread.
+
+1.  **Zombie Task**: The timed-out task continues running in the background ("zombie").
+2.  **Abandonment**: The ModuleHost moves on to the next frame/task immediately.
+3.  **Circuit Trip**: Repeated timeouts will open the circuit, preventing *new* tasks from spawning. This effectively limits the number of active zombie tasks to the `FailureThreshold`.
+4.  **Resource Leak**: The zombie task consumes memory/CPU until it finishes naturally.
+
+**Best Practice:**
+Ensure your module code (especially loops) terminates correctly. While the Host protects the simulation frame rate, it cannot free resources held by a hung thread.
+
+---
+
 ## Simulation Views & Execution Modes (Advanced)
 
 ### Understanding the "World" Nomenclature
@@ -1586,6 +1613,48 @@ public ExecutionPolicy AnalyticsPolicy => new()
     CircuitResetTimeoutMs = 30000
 };
 ```
+
+
+### Snapshot Management & Convoy Pattern
+
+**Implemented in:** BATCH-03 ✅
+
+For "Slow" modules (Asynchronous/FrameSynced at < 60Hz), creating individual snapshots (SoD) for each module can be expensive in memory and CPU (memcpy cost).
+
+**The Convoy Pattern** optimizes this by grouping modules that share the same **Update Frequency** and **Execution Mode**. These modules share a **single, immutable snapshot** of the world state.
+
+#### How it Works
+1.  **Grouping:** The Kernel automatically groups modules with identical `TargetFrequencyHz` and `Mode`.
+2.  **Shared Provider:** A single `SharedSnapshotProvider` is created for the group.
+3.  **Lazy Sync:** The snapshot is synced from the live world only when the *first* module in the convoy executes.
+4.  **Reference Counting:** The snapshot remains valid until the *last* module finishes its task.
+5.  **Pooling:** Once released, the underlying `EntityRepository` returns to a global `SnapshotPool` for reuse (zero GC).
+
+#### Benefits
+-   **Memory:** Reduced from `N * SnapshotSize` to `1 * SnapshotSize` per frequency group.
+-   **CPU:** `SyncFrom` (memcpy) happens once per group, not once per module.
+-   **Consistency:** All modules in the convoy see the exact same frame state.
+
+#### Enabling the Convoy
+Simply configure multiple modules with the **exact same** frequency.
+
+```csharp
+// Module A
+Policy = ModuleExecutionPolicy.FixedInterval(100, ModuleMode.Async); // 10Hz
+
+// Module B
+Policy = ModuleExecutionPolicy.FixedInterval(100, ModuleMode.Async); // 10Hz
+
+// Result: Both share ONE snapshot updated every 100ms.
+```
+
+#### Snapshot Pooling
+To further reduce GC pressure, ModuleHost uses a `SnapshotPool`.
+-   **Warmup:** Repositories are pre-allocated at startup.
+-   **Recycling:** Used repositories are cleared and returned to the pool.
+-   **Configuration:** Pool size defaults to reasonable values but can be tuned via `FdpConfig`.
+
+**Note:** Pooled snapshots retain their buffer capacities, stabilizing memory usage after a warmup period.
 
 ---
 
