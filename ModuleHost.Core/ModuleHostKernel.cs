@@ -202,6 +202,7 @@ namespace ModuleHost.Core
                     
                     entry.CurrentTask = task;
                     entry.FramesSinceLastRun = 0;
+                    entry.LastRunTick = _liveWorld.GlobalVersion; // Track version we started processing
                     
                     // Check Policy: If FrameSynced, we must wait
                     if (entry.Module.Policy.Mode == ModuleMode.FrameSynced)
@@ -269,7 +270,6 @@ namespace ModuleHost.Core
             
             // 4. Cleanup
             entry.CurrentTask = null;
-            entry.LastRunTick = _currentFrame;
         }
 
         public Dictionary<string, int> GetExecutionStats()
@@ -285,15 +285,33 @@ namespace ModuleHost.Core
         
         private bool ShouldRunThisFrame(ModuleEntry entry)
         {
-            var module = entry.Module;
+            var policy = entry.Module.Policy;
             
-            // Fast tier always runs
-            if (module.Tier == ModuleTier.Fast)
-                return true;
-            
-            // Slow tier runs based on UpdateFrequency
-            int frequency = Math.Max(1, module.UpdateFrequency);
-            return (entry.FramesSinceLastRun + 1) >= frequency;
+            // Check Trigger Policy
+            switch (policy.Trigger)
+            {
+                case TriggerType.Always:
+                    // Legacy behavior + Frequency throttling
+                    if (entry.Module.Tier == ModuleTier.Fast) return true;
+                    // For Slow/Async, default to running if frequency allows (Frame-based throttling)
+                    int frequency = Math.Max(1, entry.Module.UpdateFrequency);
+                    return (entry.FramesSinceLastRun + 1) >= frequency;
+
+                case TriggerType.Interval:
+                    // Time-based throttling (IntervalMs)
+                    return entry.AccumulatedDeltaTime >= (policy.IntervalMs / 1000f);
+
+                case TriggerType.OnEvent:
+                    if (policy.TriggerArg == null) return false;
+                    return _liveWorld.Bus.HasEvent(policy.TriggerArg);
+
+                case TriggerType.OnComponentChange:
+                    if (policy.TriggerArg == null) return false;
+                    return _liveWorld.HasComponentChanged(policy.TriggerArg, entry.LastRunTick);
+
+                default:
+                    return false;
+            }
         }
         
         private Action<EntityRepository>? _schemaSetup;
