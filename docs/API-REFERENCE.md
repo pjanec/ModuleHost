@@ -1492,6 +1492,271 @@ foreach (var order in view.ConsumeEvents<ConstructionOrder>())
 
 ---
 
+## Distributed Ownership & Network Integration
+
+**Implemented in:** BATCH-07 + BATCH-07.1 ⭐  
+**Namespace:** `ModuleHost.Core.Network`
+
+Network integration for distributed simulation with partial descriptor ownership.
+
+**See Also:** Distributed Ownership & Network Integration (User Guide)
+
+---
+
+### NetworkOwnership
+
+```csharp
+public struct NetworkOwnership
+{
+    public int PrimaryOwnerId;
+    public Dictionary<long, int> PartialOwners;
+    public int LocalNodeId;
+    
+    public bool OwnsDescriptor(long descriptorTypeId);
+    public void SetDescriptorOwner(long descriptorTypeId, int ownerId);
+    public int GetOwner(long descriptorTypeId);
+}
+```
+
+**Description:**  
+Tracks network ownership for an entity. Supports partial (per-descriptor) ownership per SST protocol.
+
+**Fields:**
+- `PrimaryOwnerId` - EntityMaster descriptor owner (default fallback)
+- `PartialOwners` - Per-descriptor ownership map (key: descriptor type ID, value: owner node ID)
+- `LocalNodeId` - This node's ID for ownership comparison
+
+**Methods:**
+
+#### OwnsDescriptor()
+```csharp
+public bool OwnsDescriptor(long descriptorTypeId)
+```
+
+Returns `true` if this node owns the specified descriptor.
+
+**Behavior:**
+1. Check `PartialOwners` dictionary
+2. If found, compare with `LocalNodeId`
+3. If not found, check `PrimaryOwnerId` (fallback to EntityMaster owner)
+
+**Usage:**
+```csharp
+var ownership = view.GetComponentRO<NetworkOwnership>(entity);
+if (ownership.OwnsDescriptor(descriptorTypeId: 2))
+{
+    // We own WeaponState descriptor, publish it
+}
+```
+
+#### SetDescriptorOwner()
+```csharp
+public void SetDescriptorOwner(long descriptorTypeId, int ownerId)
+```
+
+Sets ownership for a specific descriptor.
+
+**Parameters:**
+- `descriptorTypeId` - Descriptor type (e.g., 1=EntityState, 2=WeaponState, 0=EntityMaster)
+- `ownerId` - New owner node ID
+
+**Special Case:** If `descriptorTypeId == 0` (EntityMaster), updates `PrimaryOwnerId`.
+
+**Usage:**
+```csharp
+own.SetDescriptorOwner(2, newOwnerId: 3);  // Transfer WeaponState to Node 3
+```
+
+#### GetOwner()
+```csharp
+public int GetOwner(long descriptorTypeId)
+```
+
+Returns the owner node ID for a descriptor.
+
+**Returns:** Owner ID from `PartialOwners`, or `PrimaryOwnerId` if not found.
+
+---
+
+### DescriptorOwnershipMap
+
+```csharp
+public class DescriptorOwnershipMap
+{
+    public void RegisterMapping(long descriptorTypeId, params Type[] componentTypes);
+    public Type[] GetComponentsForDescriptor(long descriptorTypeId);
+    public long GetDescriptorForComponent(Type componentType);
+}
+```
+
+**Description:**  
+Maps SST descriptor types to FDP component types for ownership tracking.
+
+**Why Needed:**
+- Network uses rich descriptors (multiple fields per message)
+- FDP uses atomic components (normalized ECS)
+- Ownership must apply to correct components
+
+**Usage:**
+```csharp
+var map = new DescriptorOwnershipMap();
+
+// EntityState descriptor controls Position, Velocity, Orientation
+map.RegisterMapping(
+    descriptorTypeId: 1,
+    typeof(Position),
+    typeof(Velocity),
+    typeof(Orientation)
+);
+
+// When EntityState ownership changes...
+var components = map.GetComponentsForDescriptor(1);
+foreach (var type in components)
+{
+    // Update FDP component metadata
+    view.GetComponentTable(type).Metadata.OwnerId = newOwnerId;
+}
+```
+
+---
+
+### OwnershipUpdate Message
+
+```csharp
+public struct OwnershipUpdate
+{
+    public long EntityId;
+    public long DescrTypeId;
+    public long DescrInstanceId;
+    public int NewOwner;
+}
+```
+
+**Description:**  
+SST ownership transfer message. Sent when descriptor ownership changes between nodes.
+
+**Fields:**
+- `EntityId` - Network entity ID (not FDP Entity)
+-`DescrTypeId` - Descriptor type ID
+- `DescrInstanceId` - Descriptor instance ID (0 for single-instance descriptors)
+- `NewOwner` - New owner node ID
+
+**Transfer Protocol:**
+1. Initiator sends `OwnershipUpdate`
+2. Current owner receives → stops publishing descriptor
+3. New owner receives → publishes descriptor to "confirm"
+4. FDP component metadata synced
+
+**Usage:**
+```csharp
+var update = new OwnershipUpdate
+{
+    EntityId = 100,
+    DescrTypeId = 2,  // WeaponState
+    NewOwner = 3       // Transfer to Node 3
+};
+
+networkGateway.SendOwnershipUpdate(update);
+```
+
+**See Also:** SST Rules (`bdc-sst-rules.md`)
+
+---
+
+### DdsInstanceState
+
+```csharp
+public enum DdsInstanceState
+{
+    Alive,
+    NotAliveDisposed,
+    NotAliveNoWriters
+}
+```
+
+**Description:**  
+DDS descriptor instance state for disposal handling.
+
+**Values:**
+- `Alive` - Normal, active descriptor
+- `NotAliveDisposed` - Descriptor explicitly disposed (ownership return or entity deletion)
+- `NotAliveNoWriters` - All writers gone (optional handling)
+
+**Disposal Rules (SST):**
+1. **EntityMaster disposed** → Entity deleted
+2. **Non-master disposed by partial owner** → Ownership returns to EntityMaster owner
+3. **Non-master disposed by primary owner** → Ignore (entity deletion in progress)
+
+**Usage:**
+```csharp
+foreach (var sample in reader.TakeSamples())
+{
+    if (sample.InstanceState == DdsInstanceState.NotAliveDisposed)
+    {
+        HandleDescriptorDisposal(sample.Data.EntityId);
+        continue;
+    }
+    
+    // Normal ingress...
+}
+```
+
+---
+
+### IDataSample
+
+```csharp
+public interface IDataSample
+{
+    object Data { get; }
+    DdsInstanceState InstanceState { get; }
+}
+```
+
+**Description:**  
+Wrapper for DDS samples that includes instance state metadata.
+
+**Fields:**
+- `Data` - Descriptor data (e.g., `EntityStateDescriptor`)
+- `InstanceState` - DDS instance state (Alive/Disposed/NoWriters)
+
+**Why Wrapper:**
+- DDS provides instance state separately from data
+- Need both for disposal handling
+- Cleaner than tuple or out parameters
+
+---
+
+###IDataReader
+
+```csharp
+public interface IDataReader : IDisposable
+{
+    IEnumerable<IDataSample> TakeSamples();
+}
+```
+
+**Description:**  
+Abstraction over DDS DataReader for testability and DDS independence.
+
+**Methods:**
+
+#### TakeSamples()
+```csharp
+IEnumerable<IDataSample> TakeSamples()
+```
+
+Reads and removes available samples from DDS topic.
+
+**Returns:** Enumerable of samples with instance state.
+
+**Behavior:**
+- Consumes samples (read + take)
+- Returns wrapper with data + instance state
+- Empty if no new samples
+
+---
+
 ## Utility Types
 
 ### BitMask256

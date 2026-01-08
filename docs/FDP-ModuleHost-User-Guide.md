@@ -2088,6 +2088,317 @@ Console.WriteLine($"Timeouts: {stats.timeouts}");        // Failed due to timeou
 
 ---
 
+## Distributed Ownership & Network Integration
+
+**Implemented in:** BATCH-07 + BATCH-07.1 ⭐
+
+ModuleHost integrates with external DDS-based networks (SST protocol) for distributed simulation, allowing multiple nodes to collaboratively control different aspects of the same entity.
+
+### The Challenge: Partial Ownership
+
+In distributed simulations, entities are often **partially owned** by different nodes:
+
+**Example: Tank Entity**
+- **Node 1 (Driver Station)** controls movement (`Position`, `Velocity`)
+- **Node 2 (Weapon Station)** controls weapon (`WeaponAmmo`, `WeaponHeat`)
+- **Both** nodes need to see the complete entity state
+
+**Without Partial Ownership:**
+- ❌ Only one node can update the tank
+- ❌ Other nodes are read-only spectators
+- ❌ No collaborative control
+
+**With Partial Ownership:**
+- ✅ Node 1 updates movement descriptors
+- ✅ Node 2 updates weapon descriptors
+- ✅ Both nodes see synchronized entity
+- ✅ True distributed simulation
+
+### Entity Ownership Model
+
+#### Per-Entity Ownership (Simple)
+
+**Use for:** Entities fully controlled by one node.
+
+```csharp
+// Entity owned by Node 1
+var tank = repo.CreateEntity();
+repo.AddComponent(tank, new NetworkOwnership
+{
+    LocalNodeId = 1,
+    PrimaryOwnerId = 1,  // Node 1 owns everything
+    PartialOwners = new Dictionary<long, int>()  // Empty = no split
+});
+```
+
+**Behavior:**
+- Node 1 publishes **all** descriptors
+- Node 2 receives but doesn't publish
+- Simple, traditional replication
+
+#### Per-Descriptor Ownership (Advanced)
+
+**Use for:** Collaborative entity control.
+
+```csharp
+// Tank with split ownership
+repo.AddComponent(tank, new NetworkOwnership
+{
+    LocalNodeId = 1,
+    PrimaryOwnerId = 1,  // Node 1 is EntityMaster owner
+    PartialOwners = new Dictionary<long, int>
+    {
+        { 1, 1 },  // EntityState (movement) → Node 1
+        { 2, 2 }   // WeaponState → Node 2
+    }
+});
+```
+
+**Behavior:**
+- Node 1 publishes `EntityState` (movement)
+- Node 2 publishes `WeaponState` (weapon)
+- Both nodes receive full synchronized state
+- Collaborative control achieved
+
+### Ownership Transfer
+
+Ownership can be transferred dynamically during simulation.
+
+#### Initiating Transfer
+
+```csharp
+// Node 3 requests WeaponState ownership
+var ownershipUpdate = new OwnershipUpdate
+{
+    EntityId = tank.NetworkId,
+    DescrTypeId = 2,  // WeaponState
+    NewOwner = 3       // Transfer to Node 3
+};
+
+networkGateway.SendOwnershipUpdate(ownershipUpdate);
+```
+
+#### Transfer Protocol
+
+1. **Initiator** sends `OwnershipUpdate` message
+2. **Current owner (Node 2)**:
+   - Receives message
+   - Stops publishing WeaponState
+   - Updates local ownership map
+3. **New owner (Node 3)**:
+   - Receives message
+   - Updates local ownership map
+   - Publishes WeaponState to "confirm"
+   - FDP component metadata updated
+
+**Result:** Ownership transferred smoothly without entity disruption.
+
+### EntityMaster Descriptor
+
+**The EntityMaster descriptor is special** - it controls entity lifecycle.
+
+#### Rules
+
+1. **EntityMaster owner is the "primary" owner**
+   - Default owner for all descriptors
+   - Stored in `NetworkOwnership.PrimaryOwnerId`
+
+2. **EntityMaster disposal deletes entity**
+   - If EntityMaster is disposed on network
+   - Local entity is destroyed
+   - No orphaned descriptors
+
+3. **Partial owner disposal returns ownership**
+   - If Node 2 crashes (owns WeaponState)
+   - Ownership returns to EntityMaster owner (Node 1)
+   - Simulation continues gracefully
+
+#### Example: Node Crashes
+
+**Scenario:**
+- Node 1 owns EntityMaster + EntityState
+- Node 2 owns WeaponState
+- Node 2 crashes
+
+**Without Disposal Handling:**
+- ❌ WeaponState ownership stuck with Node 2 (dead)
+- ❌ No updates to weapon ever again
+- ❌ Entity broken
+
+**With Disposal Handling (BATCH-07.1):**
+```csharp
+// DDS publishes NOT_ALIVE_DISPOSED for WeaponState
+// Network Gateway detects disposal
+HandleDescriptorDisposal(WeaponState)
+{
+    // Check: Was Node 2 a partial owner?
+    if (currentOwner != PrimaryOwnerId)
+    {
+        // Yes! Return ownership to Node 1
+        PartialOwners.Remove(WeaponStateTypeId);
+       
+        // Falls back to PrimaryOwnerId
+        // Node 1 resumes weapon control
+    }
+}
+```
+
+**Result:**
+- ✅ Ownership automatically returns to Node 1
+- ✅ Node 1 publishes weapon updates
+- ✅ Simulation continues
+- ✅ Fault tolerance achieved
+
+### FDP Component Metadata Integration
+
+ModuleHost bridges network ownership with FDP's per-component metadata.
+
+#### Component Ownership Sync
+
+```csharp
+// When ownership changes for WeaponState descriptor...
+ownership.SetDescriptorOwner(WeaponStateTypeId, newOwnerId: 3);
+
+// Automatically sync FDP component metadata
+var weaponAmmoTable = repo.GetComponentTable<WeaponAmmo>();
+weaponAmmoTable.Metadata.OwnerId = 3;  // Synced!
+
+var weaponHeatTable = repo.GetComponentTable<WeaponHeat>();
+weaponHeatTable.Metadata.OwnerId = 3;  // Synced!
+```
+
+**Benefits:**
+- FDP systems can check ownership natively
+- No dependency on network layer
+- Consistent ownership model
+
+#### Checking Ownership in Systems
+
+```csharp
+// Option 1: Via NetworkOwnership component
+var ownership = view.GetComponentRO<NetworkOwnership>(entity);
+if (ownership.OwnsDescriptor(WeaponStateTypeId))
+{
+    // We own this, perform update
+}
+
+// Option 2: Via FDP component metadata (cleaner)
+var weaponTable = view.GetComponentTable<WeaponAmmo>();
+if (weaponTable.Metadata.OwnerId == _localNodeId)
+{
+    // We own this, perform update
+}
+```
+
+### Descriptor-Component Mapping
+
+Network descriptors (rich, denormalized) map to FDP components (atomic, normalized).
+
+#### Registration
+
+```csharp
+// During NetworkGateway initialization
+var ownershipMap = new DescriptorOwnershipMap();
+
+// Map descriptor types to components
+ownershipMap.RegisterMapping(
+    descriptorTypeId: 1,  // SST.EntityState
+    typeof(Position),
+    typeof(Velocity),
+    typeof(Orientation)
+);
+
+ownershipMap.RegisterMapping(
+    descriptorTypeId: 2,  // SST.WeaponState
+    typeof(WeaponAmmo),
+    typeof(WeaponHeat),
+    typeof(WeaponType)
+);
+```
+
+**Why Mapping?**
+- Network uses **rich descriptors** (1 message = multiple fields)
+- FDP uses **atomic components** (normalized, ECS-friendly)
+- Mapping bridges the two models
+- Ownership applied to correct components
+
+### Best Practices
+
+#### ✅ DO:
+
+- **Use EntityMaster for primary ownership**
+  - Designate one node as EntityMaster owner
+  - Other nodes are partial owners
+
+- **Map descriptors to components explicitly**
+  - Clear ownership boundaries
+  - Easier debugging
+
+- **Handle ownership transfers gracefully**
+  - Stop publishing before transfer completes
+  - Confirm ownership with DDS write
+
+- **Monitor disposal events**
+  - Node crashes are normal in distributed systems
+  - Automatic ownership return prevents stalls
+
+#### ❌ DON'T:
+
+- **Publish descriptors you don't own**
+  - Violates SST protocol
+  - Causes undefined behavior
+  - Use ownership checks in egress
+
+- **Forget EntityMaster owner**
+  - Always set `PrimaryOwnerId`
+  - Fallback for unassigned descriptors
+
+- **Assume ownership is static**
+  - Ownership can transfer at runtime
+  - Always check before publishing
+
+### Performance
+
+- **Ownership check:** O(1) dictionary lookup
+- **Descriptor disposal:** O(1) cleanup
+- **Component metadata sync:** O(k) where k = components per descriptor (typically 2-4)
+- **Overhead:** ~100ns per descriptor per frame (negligible)
+
+### Error Handling
+
+#### Scenario: Ownership Conflict
+
+**Problem:** Two nodes think they own WeaponState
+
+**Detection:**
+```csharp
+// NetworkGateway detects duplicate writes
+if (lastWriter != ownership.GetOwner(WeaponStateTypeId))
+{
+    Console.Warn($"Ownership conflict: Expected {expectedOwner}, got {lastWriter}");
+}
+```
+
+**Resolution:**
+- Last writer wins (DDS behavior)
+- Log conflict for diagnosis
+- Consider forcing ownership transfer
+
+#### Scenario: Missing ACK
+
+**Problem:** Ownership transfer message lost
+
+**Detection:**
+- Current owner stops publishing
+- New owner never receives message
+- Descriptor stalls
+
+**Resolution:**
+-Timeout-based retry (application-level)
+- Monitor statistics for stalled transfers
+
+---
+
 ## Simulation Views & Execution Modes
 
 ### The Triple-Buffering Strategy
