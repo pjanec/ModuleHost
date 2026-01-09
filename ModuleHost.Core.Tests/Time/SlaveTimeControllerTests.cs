@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Collections.Generic;
 using ModuleHost.Core.Time;
+using Fdp.Kernel;
 using Xunit;
 
 namespace ModuleHost.Core.Tests.Time
@@ -21,7 +22,7 @@ namespace ModuleHost.Core.Tests.Time
         [Fact]
         public void Update_AdvancesTimeUsingLocalClock()
         {
-            var controller = new SlaveTimeController(TimeConfig.Default, GetTicks);
+            var controller = new SlaveTimeController(new FdpEventBus(), TimeConfig.Default, GetTicks);
             
             AdvanceTime(0.1);
             var t = controller.Update();
@@ -41,7 +42,8 @@ namespace ModuleHost.Core.Tests.Time
                MaxSlew = 0.5,
                AverageLatencyTicks = 0
             };
-            var controller = new SlaveTimeController(config, GetTicks);
+
+            var controller = new SlaveTimeController(new FdpEventBus(), config, GetTicks);
             
             AdvanceTime(0.1);
             
@@ -62,7 +64,7 @@ namespace ModuleHost.Core.Tests.Time
         [Fact]
         public void Update_CalculatesTotalTimeRespectingScale()
         {
-            var controller = new SlaveTimeController(TimeConfig.Default, GetTicks);
+            var controller = new SlaveTimeController(new FdpEventBus(), TimeConfig.Default, GetTicks);
             
             AdvanceTime(0.1);
             double total = controller.Update().TotalTime;
@@ -81,7 +83,7 @@ namespace ModuleHost.Core.Tests.Time
         public void OnTimePulse_HardSnap_ResetVirtualClock()
         {
             var config = new TimeConfig { SnapThresholdMs = 100 };
-            var controller = new SlaveTimeController(config, GetTicks);
+            var controller = new SlaveTimeController(new FdpEventBus(), config, GetTicks);
             
             AdvanceTime(1.0);
             controller.Update();

@@ -11,6 +11,7 @@ using Fdp.Kernel;
 using Fdp.Kernel.FlightRecorder;
 using ModuleHost.Core;
 using ModuleHost.Core.Abstractions;
+using ModuleHost.Core.Time;
 
 namespace Fdp.Examples.CarKinem.Simulation
 {
@@ -82,6 +83,10 @@ namespace Fdp.Examples.CarKinem.Simulation
             
             // Initialize ModuleHost kernel
             _kernel = new ModuleHostKernel(_repository, _eventAccumulator);
+            
+            // Configure Time (Standalone with manual scaling)
+            _kernel.ConfigureTime(new TimeControllerConfig { Role = TimeRole.Standalone });
+            
             _kernel.Initialize(); 
             
             // Initialize systems manually
@@ -124,7 +129,7 @@ namespace Fdp.Examples.CarKinem.Simulation
         
         public int StepFrames { get; set; }
 
-        public void Tick(float deltaTime)
+        public void Tick(float deltaTime, float timeScale)
         {
             // Replay Mode
             if (IsReplaying && PlaybackController != null)
@@ -157,13 +162,22 @@ namespace Fdp.Examples.CarKinem.Simulation
             // _repository.Bus.SwapBuffers(); // Handled by _kernel.Update
 
             // Update Kernel (Handling Tick, Input, Swap, Capture, Dispatch)
-            _kernel.Update(deltaTime);
+            // Note: Since we use Standalone Master Controller, we set the scale, and it measures 
+            // wall clock internally. 'deltaTime' passed from Raylib is ignored by TimeController 
+            // in Continuous mode, but we assume they match reasonably well.
+            // If we wanted to FORCE deltaTime, we'd need Stepped mode or Manual update.
+            // For now, we trust the controller (Stopwatch) to be accurate.
+            
+            _kernel.SetTimeScale(timeScale);
+            _kernel.Update();
 
-            ref var time = ref _repository.GetSingletonUnmanaged<GlobalTime>();
-            time.DeltaTime = deltaTime;
-            time.TotalTime += deltaTime;
-            time.FrameNumber++;
-            _repository.SetSingletonUnmanaged(time); // Force version update for Recorder
+            // Manual System Updates (if not registered as Modules)
+            // Ideally these should be modules, but legacy structure is fine.
+            // Note: Kernel.Update() already advanced time and singleton.
+            
+            // Note: kernel update increments GlobalVersion.
+            // Systems below run AFTER kernel update.
+
             
             _spatialSystem.Run();
             _formationTargetSystem.Run();

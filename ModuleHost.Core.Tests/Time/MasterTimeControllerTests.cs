@@ -1,9 +1,10 @@
 using System;
 using System.Collections.Generic;
-using ModuleHost.Core.Network; // For IDataWriter
-using ModuleHost.Core.Time;
+using Fdp.Kernel;
 using Moq; // Assuming standard mocking usage or manual mocks
 using Xunit;
+using ModuleHost.Core.Time; // Added missing using
+using ModuleHost.Core.Network; // Added for IDataWriter (used in MockDataWriter)
 
 namespace ModuleHost.Core.Tests.Time
 {
@@ -13,8 +14,8 @@ namespace ModuleHost.Core.Tests.Time
         public void Update_AdvancesTimeOnlyWhenScaleIsNotZero()
         {
             // Arrange
-            var mockWriter = new Mock<IDataWriter>();
-            var controller = new MasterTimeController(mockWriter.Object);
+            var bus = new FdpEventBus();
+            var controller = new MasterTimeController(bus);
             
             // Act 1: Initial (Scale 1.0)
             var t1 = controller.Update();
@@ -52,20 +53,25 @@ namespace ModuleHost.Core.Tests.Time
         [Fact]
         public void SetTimeScale_UpdatesScaleAndPublishesPulse()
         {
-            var writer = new MockDataWriter();
-            var controller = new MasterTimeController(writer);
+            var bus = new FdpEventBus();
+            var controller = new MasterTimeController(bus);
             
             controller.Update(); // Initial update
-            writer.WrittenObjects.Clear(); // Clear 1Hz pulse if any
+            bus.SwapBuffers(); // Move published events to consumer stream if any (none expected)
+            bus.Consume<TimePulseDescriptor>(); // Clear any
             
             // Act
             controller.SetTimeScale(0.5f);
             
+            // Swap buffers to make the immediate publish available
+            bus.SwapBuffers();
+            
             // Assert
             Assert.Equal(0.5f, controller.GetTimeScale());
-            Assert.Single(writer.WrittenObjects);
-            var pulse = (TimePulseDescriptor)writer.WrittenObjects[0];
-            Assert.Equal(0.5f, pulse.TimeScale);
+            
+            var pulses = bus.Consume<TimePulseDescriptor>();
+            Assert.Single(pulses.ToArray());
+            Assert.Equal(0.5f, pulses[0].TimeScale);
         }
         
         [Fact]
@@ -77,25 +83,24 @@ namespace ModuleHost.Core.Tests.Time
              // We will skip timing specific tests if we can't control stopwatch.
              // But we can verify no pulse is sent immediately on rapid updates.
              
-             var writer = new MockDataWriter();
-             var controller = new MasterTimeController(writer);
+             var bus = new FdpEventBus();
+             var controller = new MasterTimeController(bus);
              
              controller.Update(); // Clears initial flag? No, constructor sets lastPulse to now.
              // Wait, constructor sets _lastPulseTicks = now.
              // First Update calls checking now vs last. Diff ~ 0. Should NOT publish.
              
-             writer.WrittenObjects.Clear();
+             bus.SwapBuffers();
+             var pulses = bus.Consume<TimePulseDescriptor>();
              
-             controller.Update();
-             
-             Assert.Empty(writer.WrittenObjects);
+             Assert.Empty(pulses.ToArray());
         }
 
         [Fact]
         public void GetTimeScale_ReturnsCurrentScale()
         {
-            var writer = new MockDataWriter();
-            var controller = new MasterTimeController(writer);
+            var bus = new FdpEventBus();
+            var controller = new MasterTimeController(bus);
             Assert.Equal(1.0f, controller.GetTimeScale());
             
             controller.SetTimeScale(2.0f);

@@ -30,19 +30,25 @@ namespace ModuleHost.Core.Time
         private readonly JitterFilter _errorFilter;
         private double _currentError = 0.0;
         
-        public SlaveTimeController(TimeConfig? config = null) : this(config, null)
+        private readonly FdpEventBus _eventBus;
+
+        public SlaveTimeController(FdpEventBus eventBus, TimeConfig? config = null) : this(eventBus, config, null)
         {
         }
 
-        internal SlaveTimeController(TimeConfig? config, Func<long>? tickSource)
+        internal SlaveTimeController(FdpEventBus eventBus, TimeConfig? config, Func<long>? tickSource)
         {
             _wallClock = Stopwatch.StartNew();
+            _eventBus = eventBus ?? throw new ArgumentNullException(nameof(eventBus));
             _tickSource = tickSource ?? (() => _wallClock.ElapsedTicks);
             _config = config ?? TimeConfig.Default;
             _errorFilter = new JitterFilter(_config.JitterWindowSize);
             _virtualWallTicks = _tickSource();
             _scaleChangeWallTicks = _virtualWallTicks;
             _lastFrameTicks = _virtualWallTicks;
+            
+            // Register as consumer
+            _eventBus.Register<TimePulseDescriptor>();
         }
         
         /// <summary>
@@ -315,6 +321,13 @@ namespace ModuleHost.Core.Time
         
         public GlobalTime Update()
         {
+            // Process incoming time pulses
+            var pulses = _eventBus.Consume<TimePulseDescriptor>();
+            foreach (var pulse in pulses)
+            {
+                OnTimePulseReceived(pulse);
+            }
+
             _frameNumber++;
             
             // Get current PLL-filtered error

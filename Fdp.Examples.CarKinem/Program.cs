@@ -77,7 +77,7 @@ namespace Fdp.Examples.CarKinem
                 inputManager.HandleInput(selection, pathEditor, ref camera, simulation, mainUI.UIState);
                 
                 // Simulation
-                simulation.Tick(dt * mainUI.TimeScale);
+                simulation.Tick(dt, mainUI.TimeScale);
                 
                 // Render
                 Raylib.BeginDrawing();
@@ -149,7 +149,7 @@ namespace Fdp.Examples.CarKinem
             // Tick loop
             for (int i = 0; i < 60; i++)
             {
-                sim.Tick(0.1f);
+                sim.Tick(0.1f, 1.0f);
                 var nav = sim.GetNavState(eid);
                 
                 if (i % 10 == 0)

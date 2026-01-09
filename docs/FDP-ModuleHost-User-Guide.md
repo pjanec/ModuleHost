@@ -9609,6 +9609,297 @@ while (running)
 
 ---
 
+
+# Time Control Setup Examples
+
+The ModuleHostKernel provides flexible time control through the `TimeControllerFactory`, supporting both standalone and distributed simulation scenarios.
+
+## Configuration Overview
+
+Time control is configured via `TimeControllerConfig` with three key properties:
+
+- **Role**: `Standalone`, `Master`, or `Slave`
+- **Mode**: `Continuous` (PLL-synchronized) or `Deterministic` (lockstep)
+- **SyncConfig**: Fine-tuning parameters (PLL gain, network latency, fixed delta)
+
+## Standalone Application
+
+For single-process simulations with local wall-clock time:
+
+```csharp
+using ModuleHost.Core;
+using ModuleHost.Core.Time;
+using Fdp.Kernel;
+
+// Create kernel
+var repository = new EntityRepository();
+var eventAccumulator = new EventAccumulator();
+var kernel = new ModuleHostKernel(repository, eventAccumulator);
+
+// Configure standalone time
+var timeConfig = new TimeControllerConfig
+{
+    Role = TimeRole.Standalone,
+    Mode = TimeMode.Continuous,
+    InitialTimeScale = 1.0f  // Realtime (0.0 = paused, 2.0 = 2x speed)
+};
+
+kernel.ConfigureTime(timeConfig);
+kernel.Initialize();
+
+// Game loop
+while (running)
+{
+    kernel.Update();  // Automatically advances GlobalTime
+    
+    // Access current time
+    var time = kernel.CurrentTime;
+    Console.WriteLine($"Frame {time.FrameNumber}: {time.TotalTime:F2}s");
+    
+    // Runtime control
+    if (pauseRequested)
+        kernel.SetTimeScale(0.0f);  // Pause
+    if (fastForwardRequested)
+        kernel.SetTimeScale(2.0f);  // 2x speed
+}
+```
+
+## Distributed Simulation - Continuous Mode
+
+For networked simulations with smooth PLL-based time synchronization.
+
+### Server (Master)
+
+The master publishes `TimePulse` events to synchronize slaves:
+
+```csharp
+var eventAccumulator = new EventAccumulator();
+var kernel = new ModuleHostKernel(repository, eventAccumulator);
+
+var timeConfig = new TimeControllerConfig
+{
+    Role = TimeRole.Master,
+    Mode = TimeMode.Continuous,
+    InitialTimeScale = 1.0f,
+    SyncConfig = TimeConfig.Default  // Can tune PLL parameters
+};
+
+kernel.ConfigureTime(timeConfig);
+kernel.Initialize();
+
+// Master drives time, slaves follow
+while (running)
+{
+    kernel.Update();
+}
+```
+
+### Client (Slave)
+
+The slave subscribes to `TimePulse` and adjusts local clock via PLL:
+
+```csharp
+var eventAccumulator = new EventAccumulator();
+var kernel = new ModuleHostKernel(repository, eventAccumulator);
+
+var timeConfig = new TimeControllerConfig
+{
+    Role = TimeRole.Slave,
+    Mode = TimeMode.Continuous,
+    SyncConfig = new TimeConfig
+    {
+        NetworkLatencyMs = 30,      // Measured RTT/2
+        PLLGain = 0.1f,             // Lower = smoother, higher = faster convergence
+        MaxTimeDriftMs = 100        // Safety threshold
+    }
+};
+
+kernel.ConfigureTime(timeConfig);
+kernel.Initialize();
+
+// Slave automatically follows master
+while (running)
+{
+    kernel.Update();  // Consumes TimePulse events, adjusts local time
+}
+```
+
+## Distributed Simulation - Deterministic Mode
+
+For networked simulations requiring frame-perfect synchronization (lockstep).
+
+### Server (Master)
+
+The master coordinates all peers, waiting for ACKs before advancing:
+
+```csharp
+var eventAccumulator = new EventAccumulator();
+var kernel = new ModuleHostKernel(repository, eventAccumulator);
+
+var timeConfig = new TimeControllerConfig
+{
+    Role = TimeRole.Master,
+    Mode = TimeMode.Deterministic,
+    AllNodeIds = new HashSet<int> { 1, 2, 3 },  // IDs of all slave nodes
+    SyncConfig = new TimeConfig
+    {
+        FixedDeltaSeconds = 1.0f / 60.0f,  // 60 FPS fixed timestep
+        AckTimeoutMs = 5000                 // Timeout for stragglers
+    }
+};
+
+kernel.ConfigureTime(timeConfig);
+kernel.Initialize();
+
+// Master publishes FrameOrder, waits for FrameAck from all slaves
+while (running)
+{
+    kernel.Update();  // Blocks until all ACKs received or timeout
+}
+```
+
+### Client 1 (Slave)
+
+Each slave processes frames in lockstep, sending ACKs after completion:
+
+```csharp
+var eventAccumulator = new EventAccumulator();
+var kernel = new ModuleHostKernel(repository, eventAccumulator);
+
+var timeConfig = new TimeControllerConfig
+{
+    Role = TimeRole.Slave,
+    Mode = TimeMode.Deterministic,
+    LocalNodeId = 1,  // Unique ID for this peer
+    SyncConfig = new TimeConfig
+    {
+        FixedDeltaSeconds = 1.0f / 60.0f  // Must match master
+    }
+};
+
+kernel.ConfigureTime(timeConfig);
+kernel.Initialize();
+
+// Slave waits for FrameOrder, processes frame, sends FrameAck
+while (running)
+{
+    kernel.Update();  // Blocks until FrameOrder received
+}
+```
+
+### Client 2 (Slave)
+
+```csharp
+var timeConfig = new TimeControllerConfig
+{
+    Role = TimeRole.Slave,
+    Mode = TimeMode.Deterministic,
+    LocalNodeId = 2,  // Different ID
+    SyncConfig = new TimeConfig
+    {
+        FixedDeltaSeconds = 1.0f / 60.0f
+    }
+};
+// ... same as Client 1
+```
+
+## Runtime Time Control
+
+All modes support dynamic time scale adjustments:
+
+```csharp
+// Pause simulation
+kernel.SetTimeScale(0.0f);
+
+// Resume at normal speed
+kernel.SetTimeScale(1.0f);
+
+// Slow motion (half speed)
+kernel.SetTimeScale(0.5f);
+
+// Fast forward (2x speed)
+kernel.SetTimeScale(2.0f);
+
+// Access current time state
+var time = kernel.CurrentTime;
+bool isPaused = (time.TimeScale == 0.0f);
+```
+
+## Best Practices
+
+1. **Standalone**: Use for single-player games, tools, or development
+2. **Continuous Mode**: Use for networked games with visual smoothness priority (PvE, co-op)
+3. **Deterministic Mode**: Use for competitive games requiring exact reproducibility (PvP, replays)
+4. **Network Latency**: Measure actual RTT and configure `NetworkLatencyMs = RTT/2`
+5. **PLL Tuning**: Higher gain (0.2-0.5) for LAN, lower gain (0.05-0.1) for internet
+6. **Fixed Delta**: Match your physics timestep (typically 1/60 or 1/120)
+7. **Timeout Values**: Set `AckTimeoutMs` based on worst-case frame duration + network jitter
+
+## Integration with Event Bus
+
+Time controllers publish/consume events via the `EventAccumulator`:
+
+- **TimePulse**: Published by Continuous Master, consumed by Continuous Slaves
+- **FrameOrder**: Published by Deterministic Master, consumed by Deterministic Slaves
+- **FrameAck**: Published by Deterministic Slaves, consumed by Deterministic Master
+
+Ensure your network layer translates these events across process boundaries.
+
+## Accessing Global Time
+
+Systems and modules can access the current time singleton:
+
+```csharp
+public class MySystem : ComponentSystem
+{
+    public override void Create(EntityRepository world)
+    {
+        // ... setup
+    }
+    
+    public override void Run()
+    {
+        var time = World.GetSingletonRO<GlobalTime>();
+        
+        float deltaTime = time.DeltaTime;
+        double totalTime = time.TotalTime;
+        ulong frameNumber = time.FrameNumber;
+        
+        // Use time for gameplay logic
+        if (totalTime > 60.0)
+        {
+            // Trigger event after 60 seconds
+        }
+    }
+}
+```
+
+## Migration from Legacy Code
+
+If you have existing manual time management:
+
+**Before:**
+```csharp
+float deltaTime = (float)stopwatch.Elapsed.TotalSeconds;
+globalTime += deltaTime;
+kernel.Update(deltaTime);
+```
+
+**After:**
+```csharp
+kernel.ConfigureTime(new TimeControllerConfig 
+{ 
+    Role = TimeRole.Standalone 
+});
+kernel.Update();  // No manual delta needed
+```
+
+The `TimeController` handles all timing internally, providing accurate, scalable time management.
+
+
+---
+
+
 ## Transient Components & Snapshot Filtering
 
 ### Overview
@@ -9923,6 +10214,8 @@ var mask = header.ComponentMask;
 
 ---
 
+
+---
 
 ### Cross-References
 

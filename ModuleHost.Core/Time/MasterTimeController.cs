@@ -12,7 +12,7 @@ namespace ModuleHost.Core.Time
     public class MasterTimeController : ITimeController
     {
         private readonly Stopwatch _wallClock;
-        private readonly IDataWriter _timePulseWriter;
+        private readonly FdpEventBus _eventBus;
         private readonly TimeConfig _config;
         
         // Time state
@@ -26,14 +26,17 @@ namespace ModuleHost.Core.Time
         private static readonly long PulseIntervalTicks = Stopwatch.Frequency; // 1Hz
         private long _lastFrameTicks = 0;
 
-        public MasterTimeController(IDataWriter timePulseWriter, TimeConfig? config = null)
+        public MasterTimeController(FdpEventBus eventBus, TimeConfig? config = null)
         {
             _wallClock = Stopwatch.StartNew();
-            _timePulseWriter = timePulseWriter ?? throw new ArgumentNullException(nameof(timePulseWriter));
+            _eventBus = eventBus ?? throw new ArgumentNullException(nameof(eventBus));
             _config = config ?? TimeConfig.Default;
             _scaleChangeWallTicks = _wallClock.ElapsedTicks;
             _lastPulseTicks = _wallClock.ElapsedTicks;
             _lastFrameTicks = _wallClock.ElapsedTicks; // Initialize to avoid huge delta on first frame
+            
+            // Register event type
+            _eventBus.Register<TimePulseDescriptor>();
         }
         
         public GlobalTime Update()
@@ -105,7 +108,7 @@ namespace ModuleHost.Core.Time
                 SequenceId = _frameNumber
             };
             
-            _timePulseWriter.Write(pulse);
+            _eventBus.Publish(pulse);
         }
         
         public float GetTimeScale() => _timeScale;

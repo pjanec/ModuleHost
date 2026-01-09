@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.14.36623.8 d17.14
+VisualStudioVersion = 17.14.36623.8
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "FDP", "FDP", "{A59EBC17-6ABF-B268-CF50-C946B57D9B58}"
 EndProject
@@ -18,6 +18,10 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fdp.Examples.Showcase", "FDP\Examples\Fdp.Examples.Showcase\Fdp.Examples.Showcase.csproj", "{431ABF22-A46F-46A4-AE13-F81DD99FAD08}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fdp.Examples.CarKinem", "Fdp.Examples.CarKinem\Fdp.Examples.CarKinem.csproj", "{6D6760F8-D466-C295-DE31-B2E65F67B745}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fbt.Demo.Visual", "FastBTree\demos\Fbt.Demo.Visual\Fbt.Demo.Visual.csproj", "{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fbt.Kernel", "FastBTree\src\Fbt.Kernel\Fbt.Kernel.csproj", "{260800DA-2925-AA8F-4DA5-6C54F8A5258B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -101,6 +105,30 @@ Global
 		{6D6760F8-D466-C295-DE31-B2E65F67B745}.Release|x64.Build.0 = Release|Any CPU
 		{6D6760F8-D466-C295-DE31-B2E65F67B745}.Release|x86.ActiveCfg = Release|Any CPU
 		{6D6760F8-D466-C295-DE31-B2E65F67B745}.Release|x86.Build.0 = Release|Any CPU
+		{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}.Debug|x64.Build.0 = Debug|Any CPU
+		{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}.Debug|x86.Build.0 = Debug|Any CPU
+		{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}.Release|x64.ActiveCfg = Release|Any CPU
+		{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}.Release|x64.Build.0 = Release|Any CPU
+		{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}.Release|x86.ActiveCfg = Release|Any CPU
+		{9671553E-C1D5-DC6B-BC46-0AEE54AFB534}.Release|x86.Build.0 = Release|Any CPU
+		{260800DA-2925-AA8F-4DA5-6C54F8A5258B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{260800DA-2925-AA8F-4DA5-6C54F8A5258B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{260800DA-2925-AA8F-4DA5-6C54F8A5258B}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{260800DA-2925-AA8F-4DA5-6C54F8A5258B}.Debug|x64.Build.0 = Debug|Any CPU
+		{260800DA-2925-AA8F-4DA5-6C54F8A5258B}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{260800DA-2925-AA8F-4DA5-6C54F8A5258B}.Debug|x86.Build.0 = Debug|Any CPU
+		{260800DA-2925-AA8F-4DA5-6C54F8A5258B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{260800DA-2925-AA8F-4DA5-6C54F8A5258B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{260800DA-2925-AA8F-4DA5-6C54F8A5258B}.Release|x64.ActiveCfg = Release|Any CPU
+		{260800DA-2925-AA8F-4DA5-6C54F8A5258B}.Release|x64.Build.0 = Release|Any CPU
+		{260800DA-2925-AA8F-4DA5-6C54F8A5258B}.Release|x86.ActiveCfg = Release|Any CPU
+		{260800DA-2925-AA8F-4DA5-6C54F8A5258B}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

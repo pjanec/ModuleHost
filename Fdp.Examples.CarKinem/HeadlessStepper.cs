@@ -15,19 +15,19 @@ namespace Fdp.Examples.CarKinem
             // 1. LIVE STEPPING
             Console.WriteLine("\n[Test 1] Live Stepping");
             // Advance 10 frames
-            for(int i=0; i<10; i++) sim.Tick(0.016f);
+            for(int i=0; i<10; i++) sim.Tick(0.016f, 1.0f);
             
             var time = sim.Repository.GetSingletonUnmanaged<GlobalTime>();
             Console.WriteLine($"Initial Frame: {time.FrameNumber} (Expected 10)");
             
             sim.IsPaused = true;
-            sim.Tick(0.016f);
+            sim.Tick(0.016f, 1.0f);
             time = sim.Repository.GetSingletonUnmanaged<GlobalTime>();
             Console.WriteLine($"Paused Tick Frame: {time.FrameNumber} (Expected 10)");
             
             Console.WriteLine("Stepping...");
             sim.StepFrames = 1;
-            sim.Tick(0.016f);
+            sim.Tick(0.016f, 1.0f);
             
             time = sim.Repository.GetSingletonUnmanaged<GlobalTime>();
             Console.WriteLine($"Stepped Frame: {time.FrameNumber} (Expected 11)");
@@ -43,7 +43,7 @@ namespace Fdp.Examples.CarKinem
             sim.StartReplay(); // Should load demo_recording.fdp (contains 11 frames)
             
             // Init
-            sim.Tick(0.016f); // Replay Tick (Start paused)
+            sim.Tick(0.016f, 1.0f); // Replay Tick (Start paused)
             
             // Check Replay Frame (from PlaybackController)
             // Note: PlaybackController is not public, but accessible if we check internals?
@@ -57,14 +57,14 @@ namespace Fdp.Examples.CarKinem
             // Step 1
             Console.WriteLine("Replay Step 1...");
             sim.StepFrames = 1;
-            sim.Tick(0.016f);
+            sim.Tick(0.016f, 1.0f);
             time = sim.Repository.GetSingletonUnmanaged<GlobalTime>();
             Console.WriteLine($"Replay Frame A: {time.FrameNumber}");
             
             // Step 2
             Console.WriteLine("Replay Step 2...");
             sim.StepFrames = 1;
-            sim.Tick(0.016f);
+            sim.Tick(0.016f, 1.0f);
             time = sim.Repository.GetSingletonUnmanaged<GlobalTime>();
             Console.WriteLine($"Replay Frame B: {time.FrameNumber}");
             

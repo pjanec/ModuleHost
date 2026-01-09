@@ -9,6 +9,7 @@ namespace ModuleHost.Core.Time
     /// Published by Master at 1Hz + on time scale changes.
     /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 8)]
+    [EventId(2003)] // Unique ID for TimePulse
     public struct TimePulseDescriptor
     {
         /// <summary>

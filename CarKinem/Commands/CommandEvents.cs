@@ -4,7 +4,7 @@ using Fdp.Kernel;
 
 namespace CarKinem.Commands
 {
-    [EventId(2001)]
+    [EventId(2101)]
     public struct CmdNavigateToPoint
     {
         public Entity Entity;
@@ -13,7 +13,7 @@ namespace CarKinem.Commands
         public float Speed;
     }
     
-    [EventId(2002)]
+    [EventId(2102)]
     public struct CmdFollowTrajectory
     {
         public Entity Entity;
@@ -21,7 +21,7 @@ namespace CarKinem.Commands
         public byte Looped;
     }
     
-    [EventId(2003)]
+    [EventId(2103)]
     public struct CmdNavigateViaRoad
     {
         public Entity Entity;
@@ -29,7 +29,7 @@ namespace CarKinem.Commands
         public float ArrivalRadius;
     }
     
-    [EventId(2004)]
+    [EventId(2104)]
     public struct CmdJoinFormation
     {
         public Entity Entity;
@@ -37,19 +37,19 @@ namespace CarKinem.Commands
         public int SlotIndex;
     }
     
-    [EventId(2005)]
+    [EventId(2105)]
     public struct CmdLeaveFormation
     {
         public Entity Entity;
     }
     
-    [EventId(2006)]
+    [EventId(2106)]
     public struct CmdStop
     {
         public Entity Entity;
     }
     
-    [EventId(2007)]
+    [EventId(2107)]
     public struct CmdSetSpeed
     {
         public Entity Entity;

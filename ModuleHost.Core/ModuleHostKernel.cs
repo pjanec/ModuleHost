@@ -10,6 +10,7 @@ using ModuleHost.Core.Scheduling;
 using ModuleHost.Core.Resilience;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using ModuleHost.Core.Time;
 
 [assembly: InternalsVisibleTo("ModuleHost.Core.Tests")]
 [assembly: InternalsVisibleTo("ModuleHost.Tests")]
@@ -41,10 +42,28 @@ namespace ModuleHost.Core
         
         private uint _currentFrame = 0;
         
+        // Time Control
+        private ITimeController? _timeController;
+        private TimeControllerConfig? _timeConfig;
+        
+        // Public Accessor for GlobalTime
+        public GlobalTime CurrentTime { get; private set; }
+
         public ModuleHostKernel(EntityRepository liveWorld, EventAccumulator eventAccumulator)
         {
             _liveWorld = liveWorld ?? throw new ArgumentNullException(nameof(liveWorld));
             _eventAccumulator = eventAccumulator ?? throw new ArgumentNullException(nameof(eventAccumulator));
+        }
+
+        /// <summary>
+        /// Configures the time controller for this kernel.
+        /// Must be called before Initialize().
+        /// </summary>
+        public void ConfigureTime(TimeControllerConfig config)
+        {
+             if (_initialized)
+                throw new InvalidOperationException("Cannot configure time after initialization");
+             _timeConfig = config ?? throw new ArgumentNullException(nameof(config));
         }
         
         /// <summary>
@@ -56,6 +75,24 @@ namespace ModuleHost.Core
                 throw new InvalidOperationException("Cannot register systems after Initialize() called");
             
             _globalScheduler.RegisterSystem(system);
+        }
+        
+        /// <summary>
+        /// Sets the simulation time scale.
+        /// </summary>
+        public void SetTimeScale(float scale)
+        {
+            // If strictly needed, we could allow setting this before init via config too, 
+            // but for runtime changes we need controller.
+            if (_timeController != null)
+            {
+                _timeController.SetTimeScale(scale);
+            }
+            else if (_timeConfig != null)
+            {
+                // If not initialized yet, update config
+                _timeConfig.InitialTimeScale = scale;
+            }
         }
         
         /// <summary>
@@ -74,6 +111,15 @@ namespace ModuleHost.Core
             
             // Create global pool
             _snapshotPool = new SnapshotPool(_schemaSetup, warmupCount: 10);
+            
+            // Initialize Time Controller
+            // If no config provided, default to Standalone (common for simple tests/apps)
+            if (_timeConfig == null)
+            {
+                _timeConfig = new TimeControllerConfig { Role = TimeRole.Standalone };
+            }
+            
+            _timeController = TimeControllerFactory.Create(_liveWorld.Bus, _timeConfig);
             
             // Auto-assign providers to modules
             AutoAssignProviders();
@@ -314,20 +360,58 @@ namespace ModuleHost.Core
         }
         
         /// <summary>
-        /// Main update loop (called every simulation frame).
-        /// 1. Captures event history
-        /// 2. Updates providers (syncs replicas/snapshots)
-        /// 3. Harvester: Checks for completed async modules
-        /// 4. Dispatcher: Schedules new module execution
+        /// Main update loop.
+        /// Drives the TimeController to advance simulation time, then executes the frame.
+        /// </summary>
+        public void Update()
+        {
+            if (!_initialized)
+                throw new InvalidOperationException("Must call Initialize() before Update()");
+            
+            // 1. Advance Time via Controller
+            GlobalTime globalTime = _timeController!.Update();
+            CurrentTime = globalTime;
+            
+            // 2. Execute Frame with calculated delta
+            UpdateInternal(globalTime.DeltaTime, globalTime);
+        }
+
+        /// <summary>
+        /// Legacy/Manual update loop.
+        /// Allows driving the kernel with an external delta time.
+        /// Note: TimeController will still be updated but its delta might be ignored or conflicted 
+        /// if using master mode with manual dt.
+        /// Use Update() (no args) for standard TimeController-driven execution.
         /// </summary>
         public void Update(float deltaTime)
+        {
+            // Create a synthetic GlobalTime if called manually
+            var time = new GlobalTime
+            {
+                 DeltaTime = deltaTime,
+                 TotalTime = _liveWorld.SimulationTime + deltaTime, // Approx
+                 FrameNumber = (long)_currentFrame + 1,
+                 TimeScale = 1.0f
+            };
+            
+            // Note: If we use this legacy path, we might desync the _timeController state.
+            // Ideally we should push this dt to controller?
+            // But controller usually measures wall clock.
+            // We'll proceed with internal update logic.
+            
+            UpdateInternal(deltaTime, time);
+        }
+        
+        private void UpdateInternal(float deltaTime, GlobalTime globalTime)
         {
             if (!_initialized)
                 throw new InvalidOperationException("Must call Initialize() before Update()");
             
             // 1. ADVANCE TIME
-            _liveWorld.Tick();
-
+            _liveWorld.Tick(); // Increment version
+            _liveWorld.SetSimulationTime((float)globalTime.TotalTime); // Update repository time
+            _liveWorld.SetSingletonUnmanaged(globalTime); // Update GlobalTime singleton for components
+            
             // ═══════════ PHASE: Input ═══════════
             _globalScheduler.ExecutePhase(SystemPhase.Input, _liveWorld, deltaTime);
             
@@ -694,6 +778,8 @@ namespace ModuleHost.Core
                     disposable.Dispose();
                 }
             }
+            
+            _timeController?.Dispose();
             _modules.Clear();
         }
         

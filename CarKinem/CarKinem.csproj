@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+
     <ProjectReference Include="..\FDP\Fdp.Kernel\Fdp.Kernel.csproj" />
+    <ProjectReference Include="..\ModuleHost.Core\ModuleHost.Core.csproj" />
   </ItemGroup>
 </Project>
