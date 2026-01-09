@@ -120,5 +120,34 @@ namespace ModuleHost.Core.Tests
             Assert.Same(view, view2);
             Assert.True(view.Tick > 0); // Should be accessible and valid
         }
+        [TransientComponent]
+        struct TransComp { public int Val; }
+        
+        [Fact]
+        public void Update_ExcludesTransientComponents()
+        {
+             using var live = new EntityRepository();
+             live.RegisterComponent<TransComp>();
+             live.RegisterComponent<TestComponent>();
+             
+             var acc = new EventAccumulator();
+             // Default constructor = null mask = Auto Filter Transient
+             using var provider = new DoubleBufferProvider(live, acc);
+             
+             var e = live.CreateEntity();
+             live.AddComponent(e, new TransComp { Val = 1 });
+             live.AddComponent(e, new TestComponent { X = 2 });
+             live.Tick();
+             
+             provider.Update();
+             
+             var replica = (EntityRepository)provider.AcquireView();
+             
+             // TransComp should be missing
+             // Note: SyncFrom automatically registers components on destination if missing
+             Assert.False(replica.HasComponent<TransComp>(e));
+             // TestComponent should be present
+             Assert.True(replica.HasComponent<TestComponent>(e));
+        }
     }
 }

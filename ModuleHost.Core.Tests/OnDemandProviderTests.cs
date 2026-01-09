@@ -251,5 +251,41 @@ namespace ModuleHost.Core.Tests
             var view2 = provider.AcquireView();
             Assert.Same(view1, view2);
         }
+        [TransientComponent]
+        struct TransientPos { public int X; }
+
+        [Fact]
+        public void AcquireView_ExcludesTransientComponents()
+        {
+            using var live = new EntityRepository();
+            live.RegisterComponent<TransientPos>();
+            live.RegisterComponent<Pos>(); // Persistent
+            
+            var e = live.CreateEntity();
+            live.AddComponent(e, new TransientPos { X = 99 });
+            live.AddComponent(e, new Pos { X = 1 });
+            live.Tick();
+            
+            var acc = new EventAccumulator();
+            
+            // Create a mask that explicitly requests BOTH components
+            var mask = new BitMask256();
+            mask.SetBit(ComponentType<TransientPos>.ID);
+            mask.SetBit(ComponentType<Pos>.ID);
+            
+            // Initialize provider with this mask
+            using var provider = new OnDemandProvider(live, acc, mask);
+            
+            var view = provider.AcquireView();
+            var repo = (EntityRepository)view;
+            
+            var destE = new Entity(e.Index, e.Generation);
+            
+            // Pos should be there (Persistent + Masked)
+            Assert.True(repo.HasComponent<Pos>(destE));
+            
+            // TransientPos should NOT be there (Masked BUT Transient Safety Rule applied)
+            Assert.False(repo.HasComponent<TransientPos>(destE));
+        }
     }
 }

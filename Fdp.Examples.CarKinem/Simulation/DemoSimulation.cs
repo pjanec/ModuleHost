@@ -162,7 +162,7 @@ namespace Fdp.Examples.CarKinem.Simulation
             ref var time = ref _repository.GetSingletonUnmanaged<GlobalTime>();
             time.DeltaTime = deltaTime;
             time.TotalTime += deltaTime;
-            time.FrameCount++;
+            time.FrameNumber++;
             _repository.SetSingletonUnmanaged(time); // Force version update for Recorder
             
             _spatialSystem.Run();

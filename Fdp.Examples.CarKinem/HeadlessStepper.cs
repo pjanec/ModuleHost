@@ -18,21 +18,21 @@ namespace Fdp.Examples.CarKinem
             for(int i=0; i<10; i++) sim.Tick(0.016f);
             
             var time = sim.Repository.GetSingletonUnmanaged<GlobalTime>();
-            Console.WriteLine($"Initial Frame: {time.FrameCount} (Expected 10)");
+            Console.WriteLine($"Initial Frame: {time.FrameNumber} (Expected 10)");
             
             sim.IsPaused = true;
             sim.Tick(0.016f);
             time = sim.Repository.GetSingletonUnmanaged<GlobalTime>();
-            Console.WriteLine($"Paused Tick Frame: {time.FrameCount} (Expected 10)");
+            Console.WriteLine($"Paused Tick Frame: {time.FrameNumber} (Expected 10)");
             
             Console.WriteLine("Stepping...");
             sim.StepFrames = 1;
             sim.Tick(0.016f);
             
             time = sim.Repository.GetSingletonUnmanaged<GlobalTime>();
-            Console.WriteLine($"Stepped Frame: {time.FrameCount} (Expected 11)");
+            Console.WriteLine($"Stepped Frame: {time.FrameNumber} (Expected 11)");
             
-            if (time.FrameCount == 11) Console.WriteLine("LIVE SUCCESS");
+            if (time.FrameNumber == 11) Console.WriteLine("LIVE SUCCESS");
             else Console.WriteLine("LIVE FAILURE");
             
             // 2. REPLAY STEPPING
@@ -52,23 +52,23 @@ namespace Fdp.Examples.CarKinem
             
             // Check GlobalTime
             time = sim.Repository.GetSingletonUnmanaged<GlobalTime>();
-            Console.WriteLine($"Replay Initial Frame: {time.FrameCount}"); // Should be 0 (Rewound)
+            Console.WriteLine($"Replay Initial Frame: {time.FrameNumber}"); // Should be 0 (Rewound)
             
             // Step 1
             Console.WriteLine("Replay Step 1...");
             sim.StepFrames = 1;
             sim.Tick(0.016f);
             time = sim.Repository.GetSingletonUnmanaged<GlobalTime>();
-            Console.WriteLine($"Replay Frame A: {time.FrameCount}");
+            Console.WriteLine($"Replay Frame A: {time.FrameNumber}");
             
-             // Step 2
+            // Step 2
             Console.WriteLine("Replay Step 2...");
             sim.StepFrames = 1;
             sim.Tick(0.016f);
             time = sim.Repository.GetSingletonUnmanaged<GlobalTime>();
-            Console.WriteLine($"Replay Frame B: {time.FrameCount}");
+            Console.WriteLine($"Replay Frame B: {time.FrameNumber}");
             
-            if (time.FrameCount > 0) Console.WriteLine("REPLAY SUCCESS");
+            if (time.FrameNumber > 0) Console.WriteLine("REPLAY SUCCESS");
             else Console.WriteLine("REPLAY FAILURE");
         }
     }

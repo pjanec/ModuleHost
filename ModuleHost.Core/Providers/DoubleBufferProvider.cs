@@ -55,15 +55,8 @@ namespace ModuleHost.Core.Providers
         /// </summary>
         public void Update()
         {
-            if (_mask.HasValue)
-            {
-                _replica.SyncFrom(_liveWorld, _mask.Value);
-            }
-            else
-            {
-                // Full sync (no mask - GDB copies everything)
-                _replica.SyncFrom(_liveWorld);
-            }
+            // Sync using the configured mask (or default snapshotable mask if null)
+            _replica.SyncFrom(_liveWorld, _mask);
             
             // Flush event history
             // We flush events that happened since the last sync

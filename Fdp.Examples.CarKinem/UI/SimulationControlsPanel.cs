@@ -36,7 +36,7 @@ namespace Fdp.Examples.CarKinem.UI
             ImGui.Separator();
             
             var time = sim.Repository.GetSingletonUnmanaged<global::Fdp.Kernel.GlobalTime>();
-            ImGui.Text($"Time: {time.TotalTime:F2}s | Frame: {time.FrameCount}");
+            ImGui.Text($"Time: {time.TotalTime:F2}s | Frame: {time.FrameNumber}");
             
             ImGui.Separator();
             

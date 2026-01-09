@@ -1,7 +1,7 @@
 # FDP Kernel & ModuleHost User Guide
 
 **Version:** 2.0  
-**Date:** 2026-01-07  
+**Date:** 2026-01-08  
 **Audience:** Developers building high-performance distributed simulations  
 
 ---
