@@ -1,7 +1,7 @@
 # FDP Kernel & ModuleHost User Guide
 
 **Version:** 2.0  
-**Date:** 2026-01-08  
+**Date:** 2026-01-09  
 **Audience:** Developers building high-performance distributed simulations  
 
 ---
@@ -16,9 +16,11 @@
 6. [Simulation Views & Execution Modes](#simulation-views--execution-modes)
 7. [Flight Recorder & Deterministic Replay](#flight-recorder--deterministic-replay)
 8. [Network Integration](#network-integration)
-9. [Best Practices](#best-practices)
-10. [Common Patterns](#common-patterns)
-11. [Anti-Patterns to Avoid](#anti-patterns-to-avoid)
+9. [Time Control & Synchronization](#time-control--synchronization)
+10. [Transient Components & Snapshot Filtering](#transient-components--snapshot-filtering)
+11. [Best Practices](#best-practices)
+12. [Common Patterns](#common-patterns)
+13. [Anti-Patterns to Avoid](#anti-patterns-to-avoid)
 
 ---
 
@@ -8882,6 +8884,374 @@ Console.WriteLine($"Geo: {geoPos.Latitude}, {geoPos.Longitude}");
 
 ---
 
+## Time Control & Synchronization
+
+### Overview
+
+The Time Control system provides synchronized time management across distributed simulation peers. This is essential for networked simulations where multiple peers must maintain temporal coherence.
+
+**Key Components:**
+- **GlobalTime:** Unified time struct tracking simulation time, wall time, and frame count
+- **Master Time Controller:** Authoritative timekeeper publishing periodic time pulses
+- **Slave Time Controller:** Adaptive follower using PLL to converge with master
+
+---
+
+### GlobalTime Structure
+
+The `GlobalTime` struct is the single source of truth for time in FDP simulations (`Fdp.Kernel/GlobalTime.cs`):
+
+```csharp
+public struct GlobalTime
+{
+    public long FrameNumber;              // Current frame (signed for delta calculations)
+    public long StartWallTicks;           // Simulation start time (Stopwatch ticks)
+    public long UnscaledDeltaTime;        // Frame delta in ticks
+    public long UnscaledTotalTime;        // Total elapsed ticks since start
+    public float DeltaTime;               // Frame delta in seconds (scaled)
+    public float TotalTime;               // Total elapsed seconds (scaled)
+    public float TimeScale;               // Time multiplier (1.0 = real-time)
+    public bool IsPaused;                 // Simulation pause state
+}
+```
+
+---
+
+### Master Time Controller
+
+The **Master** is the authoritative timekeeper, publishing `TimePulse` messages at 1Hz:
+
+```csharp
+using ModuleHost.Core.Time;
+
+var master = new MasterTimeController(eventBus);
+master.SetTimeScale(1.0f);
+
+while (running)
+{
+    GlobalTime time = master.Update();
+    repository.SetSingleton(time);
+    systemScheduler.ExecuteAll(repository, time.DeltaTime);
+}
+```
+
+---
+
+### Slave Time Controller
+
+The **Slave** follows the master using a Phase-Locked Loop (PLL):
+
+```csharp
+var slave = new SlaveTimeController(
+    eventBus,
+    new TimeConfig 
+    { 
+        NetworkLatencyMs = 50,      // Expected one-way latency
+        PLLGain = 0.1,              // Convergence speed
+        HardSnapThresholdMs = 500   // Force-sync threshold
+    }
+);
+
+while (running)
+{
+    GlobalTime time = slave.Update();
+    repository.SetSingleton(time);
+    systemScheduler.ExecuteAll(repository, time.DeltaTime);
+}
+```
+
+**PLL Algorithm:** Slave gradually speeds up/slows down to match master, applying proportional correction to delta time based on sync error.
+
+---
+
+## Transient Components & Snapshot Filtering
+
+### Overview
+
+**Transient Components** are excluded from all snapshot operations (GDB, DoubleBuffer, Flight Recorder). This ensures:
+- **Thread Safety:** Mutable managed components can't cause race conditions
+- **Performance:** Heavy caches don't bloat snapshots
+- **Memory:** Reduced snapshot size
+
+---
+
+### Component Classification
+
+| Component Type | Snapshotable | Rationale |
+|----------------|--------------|-----------|
+| **Struct** (unmanaged) | ✅ Yes | Value copy, thread-safe |
+| **Record** (class) | ✅ Yes | Immutable, compiler-enforced |
+| **Class** + `[TransientComponent]` | ❌ No | Mutable, main-thread only |
+| **Class** (no attribute) | ❌ **ERROR** | Must declare intent! |
+
+---
+
+### Marking Components
+
+**Option 1: Attribute** (for mutable classes):
+```csharp
+[TransientComponent]
+public class UIRenderCache
+{
+    public Dictionary<int, Texture> TextureCache = new();
+}
+```
+
+**Option 2: Record** (for immutable data):
+```csharp
+// Auto-snapshotable (no attribute needed)
+public record PlayerStats(int Health, int Score, string Name);
+```
+
+---
+
+### Registration
+
+```csharp
+// Struct - snapshotable by default
+repository.RegisterComponent<Position>();
+
+// Record - auto-detected as immutable ✅
+repository.RegisterComponent<PlayerStats>();
+
+// Class with attribute - auto-detected as transient ❌
+repository.RegisterComponent<UIRenderCache>();
+
+// Class without attribute - ERROR!
+repository.RegisterComponent<GameState>();
+// Throws: "Must mark with [TransientComponent] or convert to record"
+```
+
+---
+
+### Snapshot Filtering
+
+**Default:** Excludes transient components automatically
+```csharp
+snapshot.SyncFrom(liveWorld);
+// Result:
+// ✅ Position, Velocity (snapshotable) → Copied
+// ❌ UIRenderCache (transient) → NOT copied
+```
+
+**Debug Override:** Force include transient
+```csharp
+debugSnapshot.SyncFrom(liveWorld, includeTransient: true);
+// Result:
+// ✅ Position, Velocity → Copied
+// ✅ UIRenderCache (transient) → Copied for debugging
+```
+
+**Optimization Override:** Exclude specific snapshotable types
+```csharp
+// Network sync - exclude large data
+networkSnapshot.SyncFrom(liveWorld, excludeTypes: new[] 
+{ 
+    typeof(NavigationMesh),    // Too large for network
+    typeof(TerrainHeightMap)   // Static, doesn't change
+});
+// Result:
+// ✅ Position, Velocity → Copied
+// ❌ NavigationMesh, TerrainHeightMap → Excluded (optimization)
+// ❌ UIRenderCache → Excluded (transient)
+```
+
+**Explicit Mask Override:** Full manual control
+```csharp
+// Build custom mask (only Position and Velocity)
+var customMask = new BitMask256();
+customMask.SetBit(ComponentType<Position>.ID);
+customMask.SetBit(ComponentType<Velocity>.ID);
+
+snapshot.SyncFrom(liveWorld, mask: customMask);
+// Result:
+// ✅ Position, Velocity → Copied
+// ❌ Everything else → Excluded (explicit control)
+// Note: Explicit mask STILL filters out transient by default!
+
+// To include transient WITH explicit mask:
+snapshot.SyncFrom(liveWorld, mask: customMask, includeTransient: true);
+```
+
+**Priority Rules:**
+1. **Explicit mask** (if provided) → Intersects with snapshotable mask
+2. **includeTransient** (if true) → Overrides default transient exclusion
+3. **excludeTypes** (if provided) → Removes specific types from mask
+4. **Default** (no parameters) → Auto-builds snapshotable-only mask
+
+---
+
+### Flight Recorder Integration
+
+Flight Recorder automatically excludes transient components:
+
+```csharp
+recorder.CaptureKeyframe();  // Excludes transient
+recorder.CaptureKeyframe(includeTransient: true);  // Debug mode
+```
+
+---
+
+### Best Practices
+
+#### ⭐ **#1 Rule: Use Structs for Plain Old Data (POD)**
+
+**Performance First: Structs for Game Data**
+
+```csharp
+// ✅ RECOMMENDED: Unmanaged struct for POD (best performance)
+public struct Position
+{
+    public float X;
+    public float Y;
+    public float Z;
+}
+
+public struct Velocity
+{
+    public float X;
+    public float Y;
+    public float Z;
+}
+
+public struct Health
+{
+    public int Current;
+    public int Maximum;
+}
+
+// Benefits:
+// 1. Zero GC overhead (stack/inline allocated)
+// 2. Cache-friendly (contiguous memory)
+// 3. Always snapshotable (value copy)
+// 4. Best performance for ECS
+```
+
+**When You Need Managed Data:**
+
+```csharp
+// ✅ RECOMMENDED: Record for immutable managed data
+public record PlayerInfo(
+    string Name,           // ← String requires managed component
+    int Level,
+    int ExperiencePoints
+);
+
+// ✅ REQUIRED: Class + attribute for mutable managed data
+[TransientComponent]
+public class UIRenderCache
+{
+    public Dictionary<int, Texture> TextureCache = new();
+    public List<Mesh> MeshCache = new();
+}
+
+// Benefits of Records:
+// 1. Compiler-enforced immutability (init-only)
+// 2. Auto-snapshotable (no attribute needed)
+// 3. Thread-safe (immutable = safe shallow copy)
+// 4. Clean syntax
+```
+
+**❌ Common Mistake: Using Class for POD:**
+
+```csharp
+// ❌ WRONG: Class for simple data (slow, GC overhead)
+public class Position
+{
+    public float X { get; set; }
+    public float Y { get; set; }
+    public float Z { get; set; }
+}
+
+// ❌ WRONG: Record for simple data (still heap-allocated)
+public record Position(float X, float Y, float Z);
+
+// ✅ CORRECT: Struct for simple data (fast, cache-friendly)
+public struct Position
+{
+    public float X, Y, Z;
+}
+```
+
+---
+
+#### ✅ **DO:**
+
+- **Use `struct` for all POD components** (positions, velocities, stats)
+  - Example: `struct Position { float X, Y, Z; }`
+  - Example: `struct Velocity { float X, Y, Z; }`
+  - Example: `struct Health { int Current, Maximum; }`
+  - **Why:** Best performance, zero GC, cache-friendly
+
+- **Use `record` for immutable managed data** (names, collections)
+  - Example: `record PlayerInfo(string Name, int Level)` ← String requires managed
+  - Example: `record TeamData(string TeamName, IReadOnlyList<int> MemberIDs)`
+  - **Why:** Need managed references (string, collections) but want immutability
+
+- **Use `class` + `[TransientComponent]` for mutable managed state**
+  - Example: `[TransientComponent] class UICache { Dictionary<> ... }`
+  - Example: `[TransientComponent] class AIWorkspace { List<> ... }`
+  - **Why:** Need mutability, main-thread only
+
+- **Keep transient components on main thread only**
+  - Never access from background modules
+  - Use `IModule.GetRequiredComponents()` to exclude them
+
+- **Use `includeTransient: true` only for debugging**
+  - Inspector views
+  - Debug snapshots
+
+---
+
+#### ❌ **DON'T:**
+
+- **Don't use `class` or `record` for POD** (use `struct` instead!)
+  - ❌ `class Position` → ✅ `struct Position`
+  - ❌ `record Velocity(...)` → ✅ `struct Velocity`
+  - **Why:** Heap allocation, GC overhead, cache misses
+
+- **Don't use `class` for immutable managed data** (use `record`)
+  - ❌ `class PlayerInfo` → ✅ `record PlayerInfo(...)`
+  - **Why:** Records enforce immutability at compile-time
+
+- **Don't forget `[TransientComponent]` on mutable managed classes**
+  - System will throw helpful error if you forget
+  - But prefer immutable `record` when possible
+
+- **Don't access transient components from background modules**
+  - Will cause race conditions
+
+- **Don't use `snapshotable: true` override on mutable classes**
+  - ⚠️ **Dangerous!** Thread-safety violations
+
+---
+
+#### 🎯 **Component Type Decision Chart:**
+
+| Data Type | Solution | Example | Snapshotable |
+|-----------|----------|---------|--------------|
+| **Simple POD** (no references) | `struct` | `struct Position { float X, Y, Z; }` | ✅ Always |
+| **Immutable + Managed refs** | `record` | `record PlayerInfo(string Name)` | ✅ Auto |
+| **Mutable + Managed refs** | `class` + `[TransientComponent]` | `class UICache { Dictionary<> }` | ❌ Transient |
+
+**Decision Flow:**
+1. **Does it contain strings/collections?**
+   - **No** → Use `struct` (POD, best performance)
+   - **Yes** → Continue to step 2
+
+2. **Is it mutable (needs to change after creation)?**
+   - **No** → Use `record` (immutable managed data)
+   - **Yes** → Use `class` + `[TransientComponent]` (mutable, transient)
+
+**Rule of Thumb:** 
+- **90% of components = `struct`** (Position, Velocity, Health, etc.)
+- **5% of components = `record`** (PlayerName, TeamInfo with strings)
+- **5% of components = `class` + `[TransientComponent]`** (UI caches, AI workspace)
+
+---
+
+
+
 ### Cross-References
 
 **Related Sections:**
@@ -8910,5 +9280,6 @@ Console.WriteLine($"Geo: {geoPos.Latitude}, {geoPos.Longitude}");
 
 ---
 
-**Version 2.0 - January 2026**  
+**Version 2.0 - January 2026 (Updated: 2026-01-09)**  
 **For questions or clarifications, see: [Design Implementation Plan](DESIGN-IMPLEMENTATION-PLAN.md)**
+
