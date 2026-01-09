@@ -692,6 +692,138 @@ _moduleHost.Update(deltaTime);
 
 ---
 
+## Entity Templates & Spawning (TKB)
+
+### Overview
+
+The **Technical Knowledge Base (TKB)** provides a template system for pre-configuring entity archetypes. Instead of manually adding components every time you spawn an entity, define reusable blueprints.
+
+**Why Use TKB:**
+- **Performance:** Components configured once, applied via delegates (faster than reflection)
+- **Consistency:** All "Tank" entities use the same blueprint
+- **Maintainability:** Change tank stats in one place
+
+### Creating Templates
+
+```csharp
+using Fdp.Kernel.Tkb;
+
+// Create template database
+var tkb = new TkbDatabase();
+
+// Define a "Tank" template
+var tankTemplate = new TkbTemplate("Tank");
+tankTemplate.AddComponent(new Position { X = 0, Y = 0, Z = 0 });
+tankTemplate.AddComponent(new Health { Current = 100, Maximum = 100 });
+tankTemplate.AddComponent(new Velocity { X = 0, Y = 0, Z = 0 });
+tankTemplate.AddComponent(new TankConfig 
+{ 
+    Speed = 10.0f,
+    TurretRotationSpeed = 45.0f,
+    AmmoCapacity = 40
+});
+
+// Register template
+tkb.RegisterTemplate(tankTemplate);
+```
+
+### Spawning from Templates
+
+```csharp
+// Spawn a tank at runtime
+Entity tankEntity = tkb.Spawn("Tank", world);
+
+// Template applied all components automatically
+// Now customize instance-specific data
+var pos = world.GetComponent<Position>(tankEntity);
+pos.X = 100;
+pos.Z = 50;
+world.SetComponent(tankEntity, pos);
+```
+
+### Advanced: Component Initialization Delegates
+
+For complex initialization logic:
+
+```csharp
+var enemyTemplate = new TkbTemplate("Enemy");
+
+// Use delegate for dynamic values
+enemyTemplate.AddComponent(() => new Health 
+{ 
+    Current = Random.Shared.Next(50, 100),  // Random starting health
+    Maximum = 100 
+});
+
+enemyTemplate.AddComponent(() => new AIState
+{
+    Behavior = AIBehaviorType.Patrol,
+    PatrolPath = GenerateRandomPath()  // Dynamic path generation
+});
+
+tkb.RegisterTemplate(enemyTemplate);
+```
+
+### Template Variants
+
+Create specialized variants from base templates:
+
+```csharp
+// Base tank
+var baseTankTemplate = new TkbTemplate("BaseTank");
+baseTankTemplate.AddComponent(new Health { Current = 100, Maximum = 100 });
+baseTankTemplate.AddComponent(new Velocity());
+
+// Heavy tank (inherits base, adds armor)
+var heavyTankTemplate = new TkbTemplate("HeavyTank", baseTankTemplate);
+heavyTankTemplate.AddComponent(new Armor { Value = 50 });
+heavyTankTemplate.AddComponent(new TankConfig { Speed = 5.0f });  // Slower
+
+// Light tank (inherits base, faster)
+var lightTankTemplate = new TkbTemplate("LightTank", baseTankTemplate);
+lightTankTemplate.AddComponent(new TankConfig { Speed = 20.0f });  // Faster
+```
+
+### Integration with ModuleHost
+
+```csharp
+public class GameModule : IModule
+{
+    private TkbDatabase _tkb;
+    
+    public void Initialize(EntityRepository world, IEventBus eventBus)
+    {
+        // Load templates from config/data files
+        _tkb = LoadTemplatesFromDisk("templates.json");
+        
+        // Spawn initial entities
+        for (int i = 0; i < 10; i++)
+        {
+            var enemy = _tkb.Spawn("Enemy", world);
+            // Customize position
+        }
+    }
+}
+```
+
+### Best Practices
+
+1. **Define templates at startup:** Don't create templates in hot paths (e.g., inside `Tick()`)
+2. **Use templates for archetypes:** Tanks, Soldiers, Buildings - not for one-off entities
+3. **Combine with EntityCommandBuffer:** Spawn in systems via ECB for deferred creation
+4. **Store in singleton:** Make `TkbDatabase` accessible as a singleton or module field
+
+### Performance
+
+- **Template application:** O(N) where N = number of components in template
+- **Memory:** Templates are flyweight (shared across all spawned entities)
+- **Garbage:** Zero allocations after template registration (delegates are cached)
+
+---
+
+
+
+
 ## Systems & Scheduling
 
 ### Overview
@@ -1539,6 +1671,42 @@ public class BehaviorTreeSystem : IModuleSystem
 - BATCH-07 - Network Gateway (uses Input and Export phases)
 
 ---
+
+### ⚠️ Zombie Tasks
+
+If a module exceeds `MaxExpectedRuntimeMs`, it is **abandoned** but **not killed**.
+
+```csharp
+public class BadModule : IModule
+{
+    public void Tick(float dt)
+    {
+        while (true) { }  // ← Infinite loop!
+    }
+}
+
+// Result:
+// 1. ModuleHost times out after MaxExpectedRuntimeMs
+// 2. Circuit breaker trips (module skipped in future frames)
+// 3. BUT: The while loop continues running on a thread pool thread (zombie)
+```
+
+**Impact:**
+- **Thread Leak:** Zombie thread runs forever until app exit
+- **CPU Waste:** Zombie consumes 100% of one core
+- **Memory Leak:** Any allocations in zombie are never freed
+
+**Mitigation:**
+- Test modules with `CancellationToken` internally
+- Monitor thread pool usage
+- Use separate `AppDomain` or `Process` for untrusted modules (advanced)
+
+---
+
+
+
+
+
 
 ## Event Bus
 
@@ -4248,6 +4416,306 @@ void Replay(int frameIndex)
 
 ---
 
+### Advanced Playback with PlaybackController
+
+The `RecordingReader` provides sequential playback. For interactive replay tools (UI scrubbers, debuggers), use `PlaybackController`:
+
+#### Features
+
+- **Seeking:** Jump to any frame instantly
+- **Stepping:** Frame-by-frame navigation (forward/backward)
+- **Fast Forward:** Skip ahead at high speed
+- **Frame Index:** Built automatically for O(1) random access
+
+#### Setup
+
+```csharp
+using Fdp.Kernel.FlightRecorder;
+
+// Load recording
+var reader = new RecordingReader("simulation.fdr");
+var controller = new PlaybackController(reader, world);
+
+// Build frame index (one-time cost)
+controller.BuildIndex();  // Scans recording, creates jump table
+```
+
+#### Seeking
+
+```csharp
+// Jump to frame 1000
+controller.SeekToFrame(1000);
+
+// Jump to specific tick
+controller.SeekToTick(1234567890UL);
+
+// Result: World state reflects Frame 1000
+```
+
+#### Stepping (Frame-by-Frame Debug)
+
+```csharp
+// Step forward one frame
+controller.StepForward();
+
+// Step backward one frame
+controller.StepBackward();  // Rewinds to last keyframe, replays to target
+
+// Current frame number
+int currentFrame = controller.CurrentFrame;
+```
+
+#### Fast Forward
+
+```csharp
+// Fast forward 100 frames
+controller.FastForward(100);
+
+// Fast forward to end
+controller.FastForward(controller.TotalFrames - controller.CurrentFrame);
+```
+
+#### UI Integration Example
+
+```csharp
+public class ReplayDebugger
+{
+    private PlaybackController _playback;
+    private bool _isPaused = true;
+    private int _playbackSpeed = 1;  // 1x, 2x, 4x, etc.
+    
+    public void Update(float deltaTime)
+    {
+        if (_isPaused)
+            return;
+        
+        // Advance at playback speed
+        for (int i = 0; i < _playbackSpeed; i++)
+        {
+            if (_playback.CurrentFrame < _playback.TotalFrames - 1)
+                _playback.StepForward();
+        }
+    }
+    
+    public void OnSeekBar(int targetFrame)
+    {
+        _playback.SeekToFrame(targetFrame);
+    }
+    
+    public void OnStepForward()
+    {
+        _playback.StepForward();
+    }
+    
+    public void OnStepBackward()
+    {
+        _playback.StepBackward();
+    }
+    
+    public void OnTogglePause()
+    {
+        _isPaused = !_isPaused;
+    }
+    
+    public void OnSetSpeed(int speed)
+    {
+        _playbackSpeed = speed;  // 1x, 2x, 4x
+    }
+}
+```
+
+#### Performance Considerations
+
+- **Seeking Forward:** O(N keyframes) - fast if keyframes are frequent
+- **Seeking Backward:** O(N keyframes + M frames) - rewinds to last keyframe, replays forward
+- **Frame Index Build:** O(Recording Size) - one-time cost at load
+- **Recommendation:** Use keyframes every 60-300 frames for interactive scrubbing
+
+#### Keyframe Strategy
+
+```csharp
+var recorder = new RecordingWriter("replay.fdr");
+
+// Configure keyframe frequency
+recorder.KeyframeInterval = 120;  // Keyframe every 120 frames
+
+// Trade-off:
+// - More keyframes = Faster seeking, Larger file
+// - Fewer keyframes = Slower seeking, Smaller file
+// Recommended: 60-300 frames (1-5 seconds at 60 FPS)
+```
+
+---
+
+### Polymorphic Serialization
+
+When managed components contain **interfaces** or **abstract classes**, the serializer needs type information to deserialize correctly.
+
+#### Problem
+
+```csharp
+// Component with interface
+public record AIComponent(IAIStrategy Strategy);  // ← Interface!
+
+// Implementation
+public class PatrolStrategy : IAIStrategy { ... }
+public class AttackStrategy : IAIStrategy { ... }
+
+// Runtime
+var entity = world.CreateEntity();
+world.AddComponent(entity, new AIComponent(new PatrolStrategy()));
+
+// Serialize → Deserialize
+// ❌ ERROR: Serializer doesn't know which concrete type to create!
+```
+
+#### Solution: `[FdpPolymorphicType]` Attribute
+
+Tag all concrete implementations with unique IDs:
+
+```csharp
+// Define interface
+public interface IAIStrategy
+{
+    void Execute(Entity entity, EntityRepository world);
+}
+
+// Tag implementations
+[FdpPolymorphicType(1)]  // ← Unique ID
+public class PatrolStrategy : IAIStrategy
+{
+    public Vector3[] WaypointPath { get; init; }
+    
+    public void Execute(Entity entity, EntityRepository world)
+    {
+        // Patrol logic
+    }
+}
+
+[FdpPolymorphicType(2)]  // ← Different ID
+public class AttackStrategy : IAIStrategy
+{
+    public Entity Target { get; init; }
+    
+    public void Execute(Entity entity, EntityRepository world)
+    {
+        // Attack logic
+    }
+}
+
+[FdpPolymorphicType(3)]
+public class FleeStrategy : IAIStrategy
+{
+    public float FleeDistance { get; init; }
+    
+    public void Execute(Entity entity, EntityRepository world)
+    {
+        // Flee logic
+    }
+}
+```
+
+#### Registration (Required)
+
+Before serialization, register all polymorphic types:
+
+```csharp
+using Fdp.Kernel.FlightRecorder;
+
+var serializer = new FdpPolymorphicSerializer();
+
+// Register interface + implementations
+serializer.RegisterPolymorphicType<IAIStrategy, PatrolStrategy>(1);
+serializer.RegisterPolymorphicType<IAIStrategy, AttackStrategy>(2);
+serializer.RegisterPolymorphicType<IAIStrategy, FleeStrategy>(3);
+
+// Now serialization works
+var recorder = new RecordingWriter("replay.fdr", serializer);
+```
+
+#### Abstract Classes
+
+Works the same way:
+
+```csharp
+[FdpPolymorphicType(10)]
+public abstract class Weapon
+{
+    public abstract void Fire();
+}
+
+[FdpPolymorphicType(11)]
+public class Rifle : Weapon
+{
+    public override void Fire() { /* Rifle logic */ }
+}
+
+[FdpPolymorphicType(12)]
+public class Shotgun : Weapon
+{
+    public override void Fire() { /* Shotgun logic */ }
+}
+
+// Registration
+serializer.RegisterPolymorphicType<Weapon, Rifle>(11);
+serializer.RegisterPolymorphicType<Weapon, Shotgun>(12);
+```
+
+#### Type ID Rules
+
+1. **Unique per type:** IDs must be unique within the same interface/abstract class
+2. **Stable:** Don't change IDs after shipping (breaks old recordings)
+3. **Avoid 0:** Reserve 0 for "null" polymorphic references
+4. **Range:** 1-65535 (ushort)
+
+#### Error Handling
+
+```csharp
+// ❌ Missing [FdpPolymorphicType]
+public class NewStrategy : IAIStrategy { }
+
+// Runtime error during serialization:
+// InvalidOperationException: Type 'NewStrategy' is not registered as polymorphic
+```
+
+**Solution:** Always tag concrete types.
+
+#### Best Practices
+
+1. **Centralize registration:** Register all polymorphic types at startup
+2. **Document IDs:** Keep a master list of type IDs in comments
+3. **Avoid complex hierarchies:** Deep inheritance + polymorphism = serialization complexity
+4. **Prefer composition:** Use strategy pattern with interfaces over deep class hierarchies
+
+---
+
+### Concurrent Collections Support
+
+The `FdpAutoSerializer` has explicit support for thread-safe collections:
+
+**Supported:**
+- `List<T>`, `Dictionary<K,V>`
+- `ConcurrentDictionary<K,V>` ✅
+- `Queue<T>`, `ConcurrentQueue<T>` ✅
+- `Stack<T>`, `ConcurrentStack<T>` ✅
+- `ConcurrentBag<T>` ✅
+
+**Example:**
+```csharp
+public record ThreadSafeCache(
+    ConcurrentDictionary<int, string> Data
+);
+
+// Serialization works automatically
+world.AddComponent(entity, new ThreadSafeCache(new ConcurrentDictionary<int, string>()));
+```
+
+
+
+
+
+---
+
 ## Network Integration
 
 ### Network Gateway Pattern
@@ -5720,6 +6188,183 @@ public class SteppedSlaveController : ITimeController
     }
 }
 ```
+
+
+
+### Deterministic Mode (Lockstep)
+
+For **frame-perfect synchronization** across distributed peers, use **lockstep mode**. The master waits for all slaves to finish each frame before advancing.
+
+#### When to Use
+
+| Mode | Use Case | Sync Variance | Latency Sensitivity |
+|------|----------|---------------|---------------------|
+| **Continuous** | Real-time simulation | ~10ms | Low (PLL smooths) |
+| **Deterministic** | Frame-perfect replay, anti-cheat | 0ms | High (stalls on slow peer) |
+
+**Use Deterministic when:**
+- Server must verify client state (anti-cheat)
+- Debugging requires exact frame matching
+- Replay must be bit-identical to live run
+
+#### Architecture
+
+```
+Master                Slave 1              Slave 2
+  |                      |                    |
+  |---FrameOrder 0------>|                    |
+  |---FrameOrder 0-------------------->|
+  |                      |                    |
+  |                   [Execute               |
+  |                    Frame 0]              |
+  |                      |                    |
+  |<--FrameAck 0---------|                    |
+  |                                       [Execute
+  |                                        Frame 0]
+  |                                           |
+  |<--FrameAck 0-----------------------------|
+  |                                           |
+[All ACKs received]                          |
+  |                                           |
+  |---FrameOrder 1------>|                    |
+  |---FrameOrder 1-------------------->|
+  |                   [Execute               |
+  |                    Frame 1]          [Execute
+  |                      |                Frame 1]
+```
+
+#### Setup
+
+**Master:**
+```csharp
+using ModuleHost.Core.Time;
+
+var nodeIds = new HashSet<int> { 1, 2, 3 };  // IDs of all slave peers
+
+var timeConfig = new TimeControllerConfig
+{
+    Role = TimeRole.Master,
+    Mode = TimeMode.Deterministic,
+    AllNodeIds = nodeIds,  // Required for lockstep
+    SyncConfig = new TimeConfig
+    {
+        FixedDeltaSeconds = 1.0f / 60.0f  // 60 FPS
+    }
+};
+
+var controller = TimeControllerFactory.Create(eventBus, timeConfig);
+```
+
+**Slave:**
+```csharp
+var timeConfig = new TimeControllerConfig
+{
+    Role = TimeRole.Slave,
+    Mode = TimeMode.Deterministic,
+    LocalNodeId = 1,  // This slave's ID
+    SyncConfig = new TimeConfig
+    {
+        FixedDeltaSeconds = 1.0f / 60.0f  // Must match master
+    }
+};
+
+var controller = TimeControllerFactory.Create(eventBus, timeConfig);
+```
+
+#### Network Messages
+
+Lockstep uses two event types:
+
+```csharp
+// Master → Slaves: "Execute Frame N"
+[EventId(2001)]
+public struct FrameOrderDescriptor
+{
+    public long FrameID;         // Frame to execute
+    public float FixedDelta;     // Timestep (usually constant)
+    public long SequenceID;      // For reliability checking
+}
+
+// Slaves → Master: "Frame N complete"
+[EventId(2002)]
+public struct FrameAckDescriptor
+{
+    public long FrameID;         // Completed frame
+    public int NodeID;           // Slave ID
+    public double TotalTime;     // For verification
+}
+```
+
+#### Execution Flow
+
+1. **Master publishes FrameOrder**
+2. **Slaves consume FrameOrder, execute frame**
+3. **Slaves publish FrameAck**
+4. **Master waits for all ACKs**
+5. **When all ACKs received** → Master advances to next frame
+6. **Repeat**
+
+#### Stalling Behavior
+
+If one slave is slow, **the entire cluster waits**:
+
+```
+Frame 50:
+Master: Waiting for ACKs from [1, 2, 3]
+Slave 1: ACK sent (10ms)
+Slave 2: ACK sent (12ms)
+Slave 3: Still processing... (500ms)  ← Bottleneck
+
+Master: Stalled (500ms total)
+Result: Frame 50 took 500ms for entire cluster
+```
+
+**Mitigation:**
+- Use **equal hardware** for all slaves
+- Set **timeout warnings** in `TimeConfig.SnapThresholdMs`
+- Monitor `Console.WriteLine` output: `"[Lockstep] Frame 50 took 500ms"`
+
+#### Debugging
+
+```csharp
+// Enable diagnostic logging
+var config = new TimeConfig
+{
+    SnapThresholdMs = 100.0  // Warn if frame > 100ms
+};
+
+// Console output:
+// [Lockstep] Frame 50 took 523.4ms (threshold: 100.0ms)
+// [Lockstep] Late ACK from Node 3: Frame 48 (current: 50)
+```
+
+#### Comparison: Continuous vs Deterministic
+
+```csharp
+// Continuous Mode (PLL)
+var time = controller.Update();
+// Returns immediately with best-effort sync
+// dt may vary slightly (16.5ms, 16.8ms) due to PLL correction
+
+// Deterministic Mode (Lockstep)
+var time = controller.Update();
+// May return immediately OR stall waiting for ACKs
+// dt is ALWAYS exactly FixedDeltaSeconds (16.667ms)
+```
+
+#### Best Practices
+
+1. **Use for verification, not primary gameplay:** Lockstep adds latency
+2. **Monitor ACK times:** Identify slow peers proactively
+3. **Match hardware:** Heterogeneous clusters will stall
+4. **Test with network simulation:** Add artificial latency to catch edge cases
+
+---
+
+
+
+
+
 
 ### Time Control Usage Examples
 
@@ -9250,6 +9895,33 @@ public struct Position
 
 ---
 
+### ⚠️ BitMask256 Alignment (INSERT IN "Entity Component System")
+
+`BitMask256` requires **32-byte alignment** for AVX2 SIMD operations. This is handled automatically in `EntityHeader`.
+
+**Warning:** If you embed `BitMask256` in custom structs:
+
+```csharp
+// ❌ DANGER: May break alignment
+public struct MyCustomData
+{
+    public int SomeField;
+    public BitMask256 MyMask;  // ← Alignment lost!
+}
+
+// ✅ SAFE: Use EntityHeader as-is
+var header = world.GetEntityHeader(entity);
+var mask = header.ComponentMask;
+```
+
+**Symptoms of misalignment:**
+- Crashes in `BitMask256.Or()` or `And()` with AVX2 intrinsics
+- Only occurs on CPUs with AVX2 support
+- Works on older CPUs (slower fallback path)
+
+**Recommendation:** Don't embed `BitMask256` outside of `EntityHeader`.
+
+---
 
 
 ### Cross-References
