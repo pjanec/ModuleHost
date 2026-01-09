@@ -17,7 +17,9 @@ namespace ModuleHost.Core.Tests.Time
             var controller = new MasterTimeController(mockWriter.Object);
             
             // Act 1: Initial (Scale 1.0)
-            controller.Update(out float dt1, out double total1);
+            var t1 = controller.Update();
+            float dt1 = t1.DeltaTime;
+            double total1 = t1.TotalTime;
             
             // Wait slightly effectively simulates time passage?
             // Since controller uses Stopwatch, we can't easily mock time passage without abstraction.
@@ -53,7 +55,7 @@ namespace ModuleHost.Core.Tests.Time
             var writer = new MockDataWriter();
             var controller = new MasterTimeController(writer);
             
-            controller.Update(out _, out _); // Initial update
+            controller.Update(); // Initial update
             writer.WrittenObjects.Clear(); // Clear 1Hz pulse if any
             
             // Act
@@ -78,13 +80,13 @@ namespace ModuleHost.Core.Tests.Time
              var writer = new MockDataWriter();
              var controller = new MasterTimeController(writer);
              
-             controller.Update(out _, out _); // Clears initial flag? No, constructor sets lastPulse to now.
+             controller.Update(); // Clears initial flag? No, constructor sets lastPulse to now.
              // Wait, constructor sets _lastPulseTicks = now.
              // First Update calls checking now vs last. Diff ~ 0. Should NOT publish.
              
              writer.WrittenObjects.Clear();
              
-             controller.Update(out _, out _);
+             controller.Update();
              
              Assert.Empty(writer.WrittenObjects);
         }

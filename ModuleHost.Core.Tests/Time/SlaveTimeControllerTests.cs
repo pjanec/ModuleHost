@@ -24,7 +24,9 @@ namespace ModuleHost.Core.Tests.Time
             var controller = new SlaveTimeController(TimeConfig.Default, GetTicks);
             
             AdvanceTime(0.1);
-            controller.Update(out float dt, out double total);
+            var t = controller.Update();
+            float dt = t.DeltaTime;
+            double total = t.TotalTime;
             
             Assert.Equal(0.1f, dt, precision: 4);
             Assert.Equal(0.1, total, precision: 4);
@@ -51,7 +53,7 @@ namespace ModuleHost.Core.Tests.Time
             // Pulse suggests we should be ahead (due to latency expectation)
             controller.OnTimePulseReceived(new TimePulseDescriptor { MasterWallTicks = 0, TimeScale = 1.0f });
             
-            controller.Update(out float dt, out _);
+            float dt = controller.Update().DeltaTime;
             
             // Expected dt > 0.1 because we speed up
             Assert.True(dt > 0.1f);
@@ -63,13 +65,13 @@ namespace ModuleHost.Core.Tests.Time
             var controller = new SlaveTimeController(TimeConfig.Default, GetTicks);
             
             AdvanceTime(0.1);
-            controller.Update(out _, out double total);
+            double total = controller.Update().TotalTime;
             Assert.Equal(0.1, total, precision: 2);
             
             controller.OnTimePulseReceived(new TimePulseDescriptor { TimeScale = 2.0f });
             
             AdvanceTime(0.1);
-            controller.Update(out _, out total);
+            total = controller.Update().TotalTime;
             
             // 0.1 (first part) + 0.1 * 2.0 (second part) = 0.3
             Assert.Equal(0.3, total, precision: 2);
@@ -82,14 +84,16 @@ namespace ModuleHost.Core.Tests.Time
             var controller = new SlaveTimeController(config, GetTicks);
             
             AdvanceTime(1.0);
-            controller.Update(out _, out _);
+            controller.Update();
             
             AdvanceTime(5.0);
             // Trigger Hard Snap
             controller.OnTimePulseReceived(new TimePulseDescriptor { MasterWallTicks = 0, TimeScale = 1.0f });
             
             AdvanceTime(0.1);
-            controller.Update(out float dt, out double total);
+            var t = controller.Update();
+            float dt = t.DeltaTime;
+            double total = t.TotalTime;
             
             // With fix: dt should be 0.1 (normal delta after snap).
             // Without fix: dt would include the gap (5.1).

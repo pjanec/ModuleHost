@@ -1,4 +1,5 @@
 using System;
+using Fdp.Kernel;
 
 namespace ModuleHost.Core.Time
 {
@@ -12,9 +13,8 @@ namespace ModuleHost.Core.Time
         /// Update clock state and calculate time for this frame.
         /// Called once per frame by ModuleHostKernel.
         /// </summary>
-        /// <param name="dt">Output: DeltaTime for this frame (seconds)</param>
-        /// <param name="totalTime">Output: Total simulation time (seconds)</param>
-        void Update(out float dt, out double totalTime);
+        /// <returns>GlobalTime struct with current frame time data</returns>
+        GlobalTime Update();
         
         /// <summary>
         /// Change simulation speed.

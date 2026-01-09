@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Collections.Generic;
 using System.Linq;
+using Fdp.Kernel;
 
 namespace ModuleHost.Core.Time
 {
@@ -312,7 +313,7 @@ namespace ModuleHost.Core.Time
             }
         }
         
-        public void Update(out float dt, out double totalTime)
+        public GlobalTime Update()
         {
             _frameNumber++;
             
@@ -344,32 +345,25 @@ namespace ModuleHost.Core.Time
             double virtualWallDelta = adjustedDelta / (double)Stopwatch.Frequency;
             
             // Calculate simulation delta (respecting time scale)
-            dt = (float)(virtualWallDelta * _timeScale);
+            float dt = (float)(virtualWallDelta * _timeScale);
             
             // Calculate total simulation time from virtual wall clock
-            totalTime = _simTimeBase + 
+            double totalTime = _simTimeBase + 
                        (_virtualWallTicks - _scaleChangeWallTicks) / (double)Stopwatch.Frequency * _timeScale;
             
             // Reduce error by what we just corrected
-            // We moved _virtualWallTicks by 'adjustedDelta'.
-            // The 'rawDelta' was the passed time.
-            // The 'extra' movement was (adjusted - raw).
-            // That extra movement reduces the 'lag' (positive error).
-            // _currentError -= (adjustedDelta - rawDelta) ... roughly correctionFactor * rawDelta?
-            // The instruction says: _currentError -= correctionFactor * virtualWallDelta;
-            // Wait, _currentError is member.
-            // _errorFilter produces value.
-            // OnTimePulseReceived sets _errorFilter.
-            // Update reads _errorFilter.
-            // 
-            // Re-reading logic in prompt: 
-            // _currentError -= correctionFactor * virtualWallDelta;
-            // But `_currentError` is not used in P-Controller calculation (it uses `_errorFilter.GetFilteredValue()`).
-            // `_currentError` seems unused in the instruction snippet for calculation, only modified.
-            // Except if `_errorFilter` logic is intended to be fed by `_currentError`? No.
-            //
-            // I will implement exactly as requested.
             _currentError -= correctionFactor * virtualWallDelta;
+            
+            return new GlobalTime
+            {
+                FrameNumber = _frameNumber,
+                DeltaTime = dt,
+                TotalTime = totalTime,
+                TimeScale = _timeScale,
+                UnscaledDeltaTime = (float)(rawDelta / (double)Stopwatch.Frequency),
+                UnscaledTotalTime = _wallClock.Elapsed.TotalSeconds,
+                StartWallTicks = 0
+            };
         }
         
         public void SetTimeScale(float scale)
