@@ -507,10 +507,6 @@ Entity ID 42 Position:
 
 ---
 
-## See Also
-
-- [HYBRID-ARCHITECTURE-QUICK-REFERENCE.md](HYBRID-ARCHITECTURE-QUICK-REFERENCE.md) - Architecture overview
-- [API-REFERENCE.md](API-REFERENCE.md) - Complete API documentation
 - [reference-archive/FDP-GDB-SoD-unified.md](reference-archive/FDP-GDB-SoD-unified.md) - Design evolution
 
 ---
