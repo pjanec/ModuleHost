@@ -3,6 +3,7 @@ using System.Numerics;
 using Fdp.Kernel;
 using ModuleHost.Core.Abstractions;
 using ImGuiNET;
+using CarKinem.Formation;
 
 namespace Fdp.Examples.CarKinem.Rendering
 {
@@ -69,13 +70,10 @@ namespace Fdp.Examples.CarKinem.Rendering
                 }
                 
                 // Draw Box (Polyline)
-                // Note: AddPolyline takes points, num_points, col, flags, thickness
-                // We simplify by adding lines manually or using AddPolyline with 'closed' flag
                 drawList.AddPolyline(ref screenCorners[0], 4, colorU32, ImDrawFlags.Closed, lineThickness);
 
                 // --- Draw Front Indicator (Triangle) ---
                 
-                // World coordinates for triangle
                 float triangleSize = Math.Min(parameters.Length, parameters.Width) * 0.3f;
                 Vector2 tipLocal = new Vector2(halfLen * 0.8f, 0);
                 Vector2 leftLocal = new Vector2(halfLen * 0.3f, -triangleSize * 0.5f);
@@ -95,6 +93,34 @@ namespace Fdp.Examples.CarKinem.Rendering
                 Vector2 screenRight = TransformToScreen(rightLocal);
                 
                 drawList.AddTriangleFilled(screenLeft, screenTip, screenRight, colorU32);
+
+                // --- Formation Visualization ---
+                if (view.HasComponent<FormationRoster>(entity))
+                {
+                    var roster = view.GetComponentRO<FormationRoster>(entity);
+                    if (roster.Count > 0)
+                    {
+                        // It is a leader
+                        Vector2 centerScreen = Raylib.GetWorldToScreen2D(state.Position, camera);
+                        
+                        // Draw "L" label
+                        drawList.AddText(centerScreen - new Vector2(10, 20), 0xFF00FFFF, "Leader");
+                        
+                        // Draw lines to followers
+                        for (int i = 1; i < roster.Count; i++)
+                        {
+                            var follower = roster.GetMember(i);
+                            if (view.IsAlive(follower) && view.HasComponent<global::CarKinem.Core.VehicleState>(follower))
+                            {
+                                var fState = view.GetComponentRO<global::CarKinem.Core.VehicleState>(follower);
+                                Vector2 fScreen = Raylib.GetWorldToScreen2D(fState.Position, camera);
+                                
+                                // Draw dashed line or thin line
+                                drawList.AddLine(centerScreen, fScreen, 0xAAFF00FF, 1.0f);
+                            }
+                        }
+                    }
+                }
             });
         }
     }

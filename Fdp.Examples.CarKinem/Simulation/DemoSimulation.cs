@@ -588,6 +588,56 @@ namespace Fdp.Examples.CarKinem.Simulation
             }
         }
 
+        public void SpawnFormation(global::CarKinem.Core.VehicleClass vClass, FormationType type, int count, TrajectoryInterpolation interpolation)
+        {
+             // 1. Pick Start Position
+             Vector2 startPos = new Vector2(_rng.Next(100, 400), _rng.Next(100, 400));
+             Vector2 heading = new Vector2(1, 0); // East facing default
+             
+             // 2. Spawn Leader
+             int leaderId = SpawnVehicle(startPos, heading, vClass);
+             var leaderEntity = new Entity(leaderId, 1);
+             
+             // 3. Create Formation Command
+             _repository.Bus.Publish(new CmdCreateFormation
+             {
+                 LeaderEntity = leaderEntity,
+                 Type = type,
+                 Params = new FormationParams 
+                 {
+                     Spacing = 6.0f,
+                     WedgeAngleRad = 0.5f,
+                     MaxCatchUpFactor = 1.25f,
+                     BreakDistance = 50.0f,
+                     ArrivalThreshold = 1.0f,
+                     SpeedFilterTau = 1.0f
+                 }
+             });
+             
+             // 4. Spawn Followers
+             for (int i = 0; i < count - 1; i++) // count includes leader
+             {
+                 // Spawn slightly behind/around to avoid instant collision
+                 Vector2 offset = new Vector2(-10 - (i * 6), (i % 2 == 0 ? 1 : -1) * (i + 1) * 2); 
+                 Vector2 followerPos = startPos + offset;
+                 
+                 int followerId = SpawnVehicle(followerPos, heading, vClass);
+                 var followerEntity = new Entity(followerId, 1);
+                 
+                 _repository.Bus.Publish(new CmdJoinFormation
+                 {
+                     Entity = followerEntity,
+                     LeaderEntity = leaderEntity,
+                     SlotIndex = i // 0-indexed slots for followers
+                 });
+             }
+             
+             // 5. Move Leader
+             // Give it a destination so they start moving
+             Vector2 dest = startPos + new Vector2(200, 0);
+             SetDestination(leaderId, dest, interpolation);
+        }
+
         public NavState GetNavState(int entityIndex)
         {
             // Assuming generation 1 for demo purposes if we don't have the entity handle

@@ -1,5 +1,6 @@
 using CarKinem.Core;
 using CarKinem.Trajectory;
+using CarKinem.Formation;
 
 namespace Fdp.Examples.CarKinem.UI
 {
@@ -10,5 +11,6 @@ namespace Fdp.Examples.CarKinem.UI
     {
         public VehicleClass SelectedVehicleClass { get; set; } = VehicleClass.PersonalCar;
         public global::CarKinem.Trajectory.TrajectoryInterpolation InterpolationMode { get; set; } = global::CarKinem.Trajectory.TrajectoryInterpolation.CatmullRom;
+        public FormationType SelectedFormationType { get; set; } = FormationType.Column;
     }
 }

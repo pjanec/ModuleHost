@@ -3,6 +3,7 @@ using System.Numerics;
 using Fdp.Examples.CarKinem.Simulation;
 using CarKinem.Core;
 using CarKinem.Trajectory;
+using CarKinem.Formation;
 
 namespace Fdp.Examples.CarKinem.UI
 {
@@ -61,10 +62,30 @@ namespace Fdp.Examples.CarKinem.UI
             }
             ImGui.SameLine();
             
+            ImGui.SameLine();
+            
             if (ImGui.Button("Clear All"))
             {
                 // sim.ClearAllVehicles(); // TODO: Implement Clear in Simulation
             }
+            
+            ImGui.Separator();
+            ImGui.Text("Formation Controls");
+            // Formation Type
+            int fType = (int)uiState.SelectedFormationType;
+            ImGui.Text("Type:"); ImGui.SameLine();
+            if (ImGui.RadioButton("Column", ref fType, 0)) uiState.SelectedFormationType = FormationType.Column;
+            ImGui.SameLine();
+            if (ImGui.RadioButton("Wedge", ref fType, 1)) uiState.SelectedFormationType = FormationType.Wedge;
+            ImGui.SameLine();
+            if (ImGui.RadioButton("Line", ref fType, 2)) uiState.SelectedFormationType = FormationType.Line;
+            
+            if (ImGui.Button("Spawn Formation"))
+            {
+                sim.SpawnFormation(uiState.SelectedVehicleClass, uiState.SelectedFormationType, _spawnCount, uiState.InterpolationMode);
+            }
+            ImGui.TextColored(new Vector4(0, 1, 0, 1), "Hint: Select the Leader to move the entire formation.");
+            ImGui.TextDisabled("(Leader marked with 'Leader' label)");
             
             // Show vehicle class info
             var preset = VehiclePresets.GetPreset(uiState.SelectedVehicleClass);
