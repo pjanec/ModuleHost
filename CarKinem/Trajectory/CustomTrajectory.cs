@@ -13,5 +13,6 @@ namespace CarKinem.Trajectory
         public NativeArray<TrajectoryWaypoint> Waypoints; // Trajectory path
         public float TotalLength;             // Total arc length (meters)
         public byte IsLooped;                 // 1 = loop back to start, 0 = one-shot
+        public TrajectoryInterpolation Interpolation; // Interpolation mode
     }
 }

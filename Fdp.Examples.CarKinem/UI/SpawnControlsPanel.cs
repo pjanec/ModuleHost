@@ -2,6 +2,7 @@ using ImGuiNET;
 using System.Numerics;
 using Fdp.Examples.CarKinem.Simulation;
 using CarKinem.Core;
+using CarKinem.Trajectory;
 
 namespace Fdp.Examples.CarKinem.UI
 {
@@ -9,11 +10,17 @@ namespace Fdp.Examples.CarKinem.UI
     {
         private int _spawnCount = 10;
         private bool _randomMovement = true;
-        
         public void Render(DemoSimulation sim, UIState uiState)
         {
             ImGui.SliderInt("Spawn Count", ref _spawnCount, 1, 100);
             ImGui.Checkbox("Random Movement", ref _randomMovement);
+            
+            // Trajectory Interpolation Toggle
+            int mode = (int)uiState.InterpolationMode;
+            ImGui.Text("Trajectory Interpolation:");
+            if (ImGui.RadioButton("Linear", ref mode, 0)) uiState.InterpolationMode = TrajectoryInterpolation.Linear;
+            ImGui.SameLine();
+            if (ImGui.RadioButton("Catmull-Rom (Smooth)", ref mode, 1)) uiState.InterpolationMode = TrajectoryInterpolation.CatmullRom;
             
             // Vehicle class combo box
             string[] classNames = new string[]
@@ -33,7 +40,7 @@ namespace Fdp.Examples.CarKinem.UI
             
             if (ImGui.Button("Spawn Vehicles"))
             {
-                SpawnVehicles(sim, _spawnCount, _randomMovement, uiState.SelectedVehicleClass);
+                SpawnVehicles(sim, _spawnCount, _randomMovement, uiState.SelectedVehicleClass, uiState.InterpolationMode);
             }
             
             ImGui.SameLine();
@@ -50,7 +57,7 @@ namespace Fdp.Examples.CarKinem.UI
             ImGui.SameLine();
             if (ImGui.Button("Spawn Roamers"))
             {
-               sim.SpawnRoamers(_spawnCount, uiState.SelectedVehicleClass);
+               sim.SpawnRoamers(_spawnCount, uiState.SelectedVehicleClass, uiState.InterpolationMode);
             }
             ImGui.SameLine();
             
@@ -67,7 +74,7 @@ namespace Fdp.Examples.CarKinem.UI
             ImGui.Text($"Max Turn: {(preset.MaxSteerAngle * 180 / MathF.PI):F0}°");
         }
         
-        private void SpawnVehicles(DemoSimulation sim, int count, bool randomMovement, VehicleClass vehicleClass)
+        private void SpawnVehicles(DemoSimulation sim, int count, bool randomMovement, VehicleClass vehicleClass, TrajectoryInterpolation interpolation)
         {
             var rng = new Random();
             
@@ -92,7 +99,7 @@ namespace Fdp.Examples.CarKinem.UI
                         rng.Next(0, 500),
                         rng.Next(0, 500)
                     );
-                    sim.IssueMoveToPointCommand(entityIndex, destination);
+                    sim.IssueMoveToPointCommand(entityIndex, destination, interpolation);
                 }
             }
         }

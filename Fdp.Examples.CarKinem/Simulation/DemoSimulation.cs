@@ -442,7 +442,7 @@ namespace Fdp.Examples.CarKinem.Simulation
             return e.Index;
         }
         
-        public void AddWaypoint(int entityIndex, Vector2 destination)
+        public void AddWaypoint(int entityIndex, Vector2 destination, TrajectoryInterpolation interpolation = TrajectoryInterpolation.Linear)
         {
              // 1. Get/Create Queue
              if (!_waypointQueues.ContainsKey(entityIndex))
@@ -470,7 +470,7 @@ namespace Fdp.Examples.CarKinem.Simulation
              speeds[speeds.Length - 1] = 0.0f; // Stop at end
              
              // 5. Register new Trajectory
-             int trajId = TrajectoryPool.RegisterTrajectory(path.ToArray(), speeds, false);
+             int trajId = TrajectoryPool.RegisterTrajectory(path.ToArray(), speeds, false, interpolation);
              
              // Cleanup old trajectory to prevent leaks
              // Only if we were strictly following a custom trajectory before
@@ -487,18 +487,19 @@ namespace Fdp.Examples.CarKinem.Simulation
             });
         }
         
-        public void SetDestination(int entityIndex, Vector2 destination)
+        public void SetDestination(int entityIndex, Vector2 destination, TrajectoryInterpolation interpolation = TrajectoryInterpolation.Linear)
         {
              if (_waypointQueues.ContainsKey(entityIndex))
              {
                  _waypointQueues[entityIndex].Clear();
              }
-             AddWaypoint(entityIndex, destination);
+             AddWaypoint(entityIndex, destination, interpolation);
         }
 
         // Deprecated compatibility wrapper
         public void IssueMoveToPointCommand(int entityIndex, Vector2 destination) => AddWaypoint(entityIndex, destination);
         public void IssueMoveToPointCommand(Entity entity, Vector2 destination) => AddWaypoint(entity.Index, destination);
+        public void IssueMoveToPointCommand(int entityIndex, Vector2 destination, TrajectoryInterpolation interpolation) => AddWaypoint(entityIndex, destination, interpolation);
 
         public void SpawnCollisionTest(global::CarKinem.Core.VehicleClass vClass)
         {
@@ -539,7 +540,8 @@ namespace Fdp.Examples.CarKinem.Simulation
             vParams.MaxLatAccel = 15.0f;  // Grip
             // Initialization: Direct modification is safe here (Single thread setup).
             // For runtime updates, prefer Command Buffers or Events.
-            _repository.SetComponent(entity, vParams);
+            // _repository.SetComponent(entity, vParams); // Already ref returned? No, struct copy.
+             _repository.SetComponent(entity, vParams);
             
             // Set Color (Visual hack? Or does renderer use class color?)
             // We can't change color easily as it's static in VehiclePresets/Class.
@@ -574,7 +576,7 @@ namespace Fdp.Examples.CarKinem.Simulation
             }
         }
 
-        public void SpawnRoamers(int count, global::CarKinem.Core.VehicleClass vClass)
+        public void SpawnRoamers(int count, global::CarKinem.Core.VehicleClass vClass, TrajectoryInterpolation interpolation = TrajectoryInterpolation.Linear)
         {
             for(int i=0; i<count; i++)
             {
@@ -582,7 +584,7 @@ namespace Fdp.Examples.CarKinem.Simulation
                  int id = SpawnVehicle(pos, Vector2.Zero, vClass);
                  
                  _roamingEntities.Add(id);
-                 SetDestination(id, new Vector2(_rng.Next(0,500), _rng.Next(0,500)));
+                 SetDestination(id, new Vector2(_rng.Next(0,500), _rng.Next(0,500)), interpolation);
             }
         }
 

@@ -1,4 +1,5 @@
 using CarKinem.Core;
+using CarKinem.Trajectory;
 
 namespace Fdp.Examples.CarKinem.UI
 {
@@ -8,5 +9,6 @@ namespace Fdp.Examples.CarKinem.UI
     public class UIState
     {
         public VehicleClass SelectedVehicleClass { get; set; } = VehicleClass.PersonalCar;
+        public global::CarKinem.Trajectory.TrajectoryInterpolation InterpolationMode { get; set; } = global::CarKinem.Trajectory.TrajectoryInterpolation.CatmullRom;
     }
 }
