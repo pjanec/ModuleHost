@@ -174,11 +174,24 @@ namespace CarKinem.Systems
                 @params.LookaheadTimeMax,
                 @params.MaxSteerAngle);
             
+            // Cornering speed limit
+            float maxCorneringSpeed = float.MaxValue;
+            if (MathF.Abs(steerAngle) > 0.01f)
+            {
+                // Radius = L / sin(delta)
+                float turnRadius = @params.WheelBase / MathF.Abs(MathF.Sin(steerAngle));
+                // V_max = sqrt(a_lat_max * R)
+                maxCorneringSpeed = MathF.Sqrt(@params.MaxLatAccel * turnRadius);
+            }
+            
             // Speed control
             float targetSpeedAfterAvoidance = avoidanceVelocity.Length();
+            // Apply cornering limit
+            float finalTargetSpeed = MathF.Min(targetSpeedAfterAvoidance, maxCorneringSpeed);
+            
             float accel = SpeedController.CalculateAcceleration(
                 state.Speed,
-                targetSpeedAfterAvoidance,
+                finalTargetSpeed,
                 @params.AccelGain,
                 @params.MaxAccel,
                 @params.MaxDecel);

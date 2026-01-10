@@ -615,11 +615,14 @@ namespace Fdp.Examples.CarKinem.Simulation
              });
              
              // 4. Spawn Followers
+             // Retrieve the template to spawn them in correct positions immediately
+             var template = FormationTemplates.GetTemplate(type);
+             
              for (int i = 0; i < count - 1; i++) // count includes leader
              {
-                 // Spawn slightly behind/around to avoid instant collision
-                 Vector2 offset = new Vector2(-10 - (i * 6), (i % 2 == 0 ? 1 : -1) * (i + 1) * 2); 
-                 Vector2 followerPos = startPos + offset;
+                 // Calculate slot position based on template
+                 // Note: slot index i corresponds to the i-th follower
+                 Vector2 followerPos = template.GetSlotPosition(i, startPos, heading);
                  
                  int followerId = SpawnVehicle(followerPos, heading, vClass);
                  var followerEntity = new Entity(followerId, 1);

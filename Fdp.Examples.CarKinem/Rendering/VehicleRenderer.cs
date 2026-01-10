@@ -11,9 +11,8 @@ namespace Fdp.Examples.CarKinem.Rendering
     {
         public void RenderVehicles(ISimulationView view, Camera2D camera, int? selectedEntityId)
         {
-            // Use ImGui's background draw list. 
-            // It draws behind the main UI windows but on top of the generic Raylib background/cleared screen.
-            var drawList = ImGui.GetBackgroundDrawList();
+            // Use Raylib's 2D mode for vector graphics (high performance)
+            // Assumes Camera2D mode is ALREADY ACTIVE (caller responsibility)
 
             var query = view.Query().With<global::CarKinem.Core.VehicleState>().With<global::CarKinem.Core.VehicleParams>().Build();
             
@@ -25,74 +24,89 @@ namespace Fdp.Examples.CarKinem.Rendering
                 var state = view.GetComponentRO<global::CarKinem.Core.VehicleState>(entity);
                 var parameters = view.GetComponentRO<global::CarKinem.Core.VehicleParams>(entity);
                 
-                // Calculate rotation
-                float rotation = MathF.Atan2(state.Forward.Y, state.Forward.X);
+                // Calculate rotation (in degrees for Raylib)
+                float rotationRad = MathF.Atan2(state.Forward.Y, state.Forward.X);
+                // float rotationDeg = rotationRad * (180.0f / MathF.PI);
                 
                 // Get color
                 var (r, g, b) = global::CarKinem.Core.VehiclePresets.GetColor(parameters.Class);
-                uint colorU32 = ImGui.GetColorU32(new Vector4(r/255f, g/255f, b/255f, 1.0f));
+                Color vehicleColor = new Color((byte)r, (byte)g, (byte)b, (byte)255);
                 
-                float lineThickness = 2.0f; // Screen pixels
+                float thickness = 0.15f; // World units
                 
                 if (selectedEntityId.HasValue && entity.Index == selectedEntityId.Value)
                 {
-                    colorU32 = ImGui.GetColorU32(new Vector4(0f, 1f, 0f, 1.0f)); // Green for selected
-                    lineThickness = 3.5f;
+                    vehicleColor = Color.Green;
+                    thickness = 0.3f;
+                    
+                    // --- Draw Nav Trajectory (Thin Line) for Selected ---
+                    if (view.HasComponent<global::CarKinem.Core.NavState>(entity))
+                    {
+                        var nav = view.GetComponentRO<global::CarKinem.Core.NavState>(entity);
+                        if (nav.Mode == global::CarKinem.Core.NavigationMode.CustomTrajectory || 
+                            nav.Mode == global::CarKinem.Core.NavigationMode.RoadGraph ||
+                            (nav.Mode == global::CarKinem.Core.NavigationMode.None && !nav.HasArrived.Equals(1)))
+                        {
+                             if (nav.Mode == global::CarKinem.Core.NavigationMode.None)
+                             {
+                                 Raylib.DrawLineEx(state.Position, nav.FinalDestination, 0.1f, new Color(0, 255, 255, 100));
+                                 Raylib.DrawCircleV(nav.FinalDestination, 0.5f, new Color(0, 255, 255, 100));
+                             }
+                        }
+                    }
                 }
                 
-                // Calculate corners in world space
+                // Calculate corners manually for rotating rectangle
                 float halfLen = parameters.Length / 2;
                 float halfWidth = parameters.Width / 2;
+                float cosR = MathF.Cos(rotationRad);
+                float sinR = MathF.Sin(rotationRad);
                 
-                Vector2[] localCorners = new Vector2[]
+                Vector2 Transform(float x, float y)
                 {
-                    new Vector2(-halfLen, -halfWidth),
-                    new Vector2(halfLen, -halfWidth),
-                    new Vector2(halfLen, halfWidth),
-                    new Vector2(-halfLen, halfWidth) 
-                };
-                
-                // Transform to Screen Space directly
-                Vector2[] screenCorners = new Vector2[4];
-                float cosR = MathF.Cos(rotation);
-                float sinR = MathF.Sin(rotation);
-
-                for (int i = 0; i < 4; i++)
-                {
-                    // World transform
-                    Vector2 worldPos = new Vector2(
-                        state.Position.X + localCorners[i].X * cosR - localCorners[i].Y * sinR,
-                        state.Position.Y + localCorners[i].X * sinR + localCorners[i].Y * cosR
+                     return new Vector2(
+                        state.Position.X + x * cosR - y * sinR,
+                        state.Position.Y + x * sinR + y * cosR
                     );
-                    
-                    // Project to Screen
-                    screenCorners[i] = Raylib.GetWorldToScreen2D(worldPos, camera);
                 }
                 
-                // Draw Box (Polyline)
-                drawList.AddPolyline(ref screenCorners[0], 4, colorU32, ImDrawFlags.Closed, lineThickness);
-
-                // --- Draw Front Indicator (Triangle) ---
+                Vector2 p1 = Transform(-halfLen, -halfWidth);
+                Vector2 p2 = Transform(halfLen, -halfWidth);
+                Vector2 p3 = Transform(halfLen, halfWidth);
+                Vector2 p4 = Transform(-halfLen, halfWidth);
                 
+                // Draw Box
+                Raylib.DrawLineEx(p1, p2, thickness, vehicleColor);
+                Raylib.DrawLineEx(p2, p3, thickness, vehicleColor);
+                Raylib.DrawLineEx(p3, p4, thickness, vehicleColor);
+                Raylib.DrawLineEx(p4, p1, thickness, vehicleColor);
+                
+                // Draw Front Triangle Indicator
                 float triangleSize = Math.Min(parameters.Length, parameters.Width) * 0.3f;
-                Vector2 tipLocal = new Vector2(halfLen * 0.8f, 0);
-                Vector2 leftLocal = new Vector2(halfLen * 0.3f, -triangleSize * 0.5f);
-                Vector2 rightLocal = new Vector2(halfLen * 0.3f, triangleSize * 0.5f);
+                Vector2 t1 = Transform(halfLen * 0.8f, 0);
+                Vector2 t2 = Transform(halfLen * 0.3f, -triangleSize * 0.5f);
+                Vector2 t3 = Transform(halfLen * 0.3f, triangleSize * 0.5f);
                 
-                Vector2 TransformToScreen(Vector2 local)
-                {
-                    Vector2 world = new Vector2(
-                        state.Position.X + local.X * cosR - local.Y * sinR,
-                        state.Position.Y + local.X * sinR + local.Y * cosR
-                    );
-                    return Raylib.GetWorldToScreen2D(world, camera);
-                }
+                Raylib.DrawTriangle(t1, t3, t2, vehicleColor); // Note vertex order for culling
 
-                Vector2 screenTip = TransformToScreen(tipLocal);
-                Vector2 screenLeft = TransformToScreen(leftLocal);
-                Vector2 screenRight = TransformToScreen(rightLocal);
+                // Render ID label using Raylib (Screen Space) to avoid ImGui vertex limit
+                // We do this here inside the loop while we have the entity context
+                // Note: We need to temporarily end Mode2D to draw screen space text, then begin again?
+                // No, that's expensive per entity.
+                // Alternative: Draw text in World Space with small scale?
+                // Raylib.DrawTextEx is World Space if inside Mode2D? Yes, but it scales with zoom (gets blurry or huge).
                 
-                drawList.AddTriangleFilled(screenLeft, screenTip, screenRight, colorU32);
+                // Better approach: Collect labels and draw them in a second pass after EndMode2D?
+                // Or just use DrawTextPro in World Space if we accept scaling.
+                
+                // Let's stick to world space geometry for now, and maybe avoid text for every single entity if count is high.
+                // Only draw label for selected entity or if zoomed in closely?
+                
+                if (camera.Zoom > 0.5f || (selectedEntityId.HasValue && entity.Index == selectedEntityId.Value))
+                {
+                    // Simple world space text? Raylib default font is bitmap, scales poorly.
+                    // Let's skip text for all entities to save performance/vertices, unless critical.
+                }
 
                 // --- Formation Visualization ---
                 if (view.HasComponent<FormationRoster>(entity))
@@ -100,12 +114,11 @@ namespace Fdp.Examples.CarKinem.Rendering
                     var roster = view.GetComponentRO<FormationRoster>(entity);
                     if (roster.Count > 0)
                     {
-                        // It is a leader
-                        Vector2 centerScreen = Raylib.GetWorldToScreen2D(state.Position, camera);
-                        
-                        // Draw "L" label
-                        drawList.AddText(centerScreen - new Vector2(10, 20), 0xFF00FFFF, "Leader");
-                        
+                        // Draw leader marker
+                         Raylib.DrawCircleV(state.Position, halfWidth * 0.8f, new Color(255, 0, 255, 100));
+                         // Extra ring to signify leader clearly
+                         Raylib.DrawCircleLines((int)state.Position.X, (int)state.Position.Y, halfWidth * 1.5f, Color.Magenta);
+
                         // Draw lines to followers
                         for (int i = 1; i < roster.Count; i++)
                         {
@@ -113,10 +126,7 @@ namespace Fdp.Examples.CarKinem.Rendering
                             if (view.IsAlive(follower) && view.HasComponent<global::CarKinem.Core.VehicleState>(follower))
                             {
                                 var fState = view.GetComponentRO<global::CarKinem.Core.VehicleState>(follower);
-                                Vector2 fScreen = Raylib.GetWorldToScreen2D(fState.Position, camera);
-                                
-                                // Draw dashed line or thin line
-                                drawList.AddLine(centerScreen, fScreen, 0xAAFF00FF, 1.0f);
+                                Raylib.DrawLineEx(state.Position, fState.Position, 0.1f, new Color(255, 0, 255, 128));
                             }
                         }
                     }

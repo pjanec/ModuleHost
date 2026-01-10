@@ -1,4 +1,4 @@
-﻿using Raylib_cs;
+using Raylib_cs;
 using ImGuiNET;
 using rlImGui_cs;
 using System.Numerics;
@@ -87,8 +87,10 @@ namespace Fdp.Examples.CarKinem
                 
                 // World rendering
                 roadRenderer.RenderRoadNetwork(simulation.RoadNetwork, camera);
-                // Vehicles and Labels moved to ImGui pass
-
+                
+                // Vehicles (Now using Raylib vector graphics)
+                vehicleRenderer.RenderVehicles(simulation.View, camera, selection.SelectedEntityId);
+                
                 if (selection.SelectedEntityId.HasValue)
                 {
                     // Render Active Trajectory for selected entity
@@ -109,10 +111,20 @@ namespace Fdp.Examples.CarKinem
                 // UI
                 rlImGui.Begin();
                 
-                // Render World Objects using ImGui DrawLists (must be inside ImGui frame)
-                // Note: We still need Camera for World->Screen transform
-                vehicleRenderer.RenderVehicles(simulation.View, camera, selection.SelectedEntityId);
-                labelRenderer.RenderVehicleLabels(simulation.View, camera);
+                // Render Labels (Text needs to be screen space or ImGui)
+                // WARNING: labelRenderer still uses ImGui.GetForegroundDrawList() which contributes to vertex count
+                // If vertex limit is critical, we must limit label count or use Raylib text.
+                // We'll limit it to only selected entity or when count is low.
+                if (simulation.View.Query().With<VehicleState>().Build().Count() < 50)
+                {
+                    labelRenderer.RenderVehicleLabels(simulation.View, camera);
+                }
+                else if (selection.SelectedEntityId.HasValue)
+                {
+                    // Only render label for selected entity to save vertices
+                    // We need a specific method for single label or just modify the renderer to filter?
+                    // For now, let's just skip mass labeling.
+                }
                 
                 mainUI.Render(simulation, selection);
                 rlImGui.End();
