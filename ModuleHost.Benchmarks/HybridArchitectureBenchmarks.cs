@@ -80,7 +80,7 @@ namespace ModuleHost.Benchmarks
     {
         static void Main(string[] args)
         {
-            BenchmarkRunner.Run<HybridArchitectureBenchmarks>();
+            BenchmarkRunner.Run<CarKinemPerformance>();
         }
     }
 }

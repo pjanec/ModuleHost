@@ -31,14 +31,31 @@ namespace CarKinem.Systems
             _trajectoryPool = trajectoryPool;
         }
 
+        private System.Diagnostics.Stopwatch? _perfStopwatch;
+        private double _totalUpdateTime = 0;
+        private int _updateCount = 0;
+        
+        public bool EnablePerformanceLogging { get; set; } = false;
+        
+        /// <summary>
+        /// For testing/debugging purposes.
+        /// </summary>
+        public bool ForceSerial { get; set; } = false;
+
+        protected override void OnCreate()
+        {
+            base.OnCreate();
+            if (EnablePerformanceLogging)
+                _perfStopwatch = new System.Diagnostics.Stopwatch();
+        }
+
         protected override void OnUpdate()
         {
+            _perfStopwatch?.Restart();
+
             float dt = DeltaTime;
             
             // Read spatial grid from singleton (Data-Oriented dependency)
-            // If singleton is missing (e.g. first frame or testing), handle gracefully?
-            // World.GetSingleton throws if missing. 
-            // In tests we register it.
             if (!World.HasSingleton<SpatialGridData>()) return;
             
             var gridData = World.GetSingleton<SpatialGridData>();
@@ -51,13 +68,44 @@ namespace CarKinem.Systems
                 .With<NavState>()
                 .Build();
             
-            // Serial update to ensure proper versioning (Parallel interferes with Recorder stamps)
-            query.ForEach((entity) =>
+            // We use FDP Kernel's optimized ForEachParallel which handles load balancing
+            // and avoids allocations.
+            
+            if (ForceSerial)
             {
-                UpdateVehicle(entity, dt, spatialGrid);
-            });
+                // Zero-allocation standard iteration
+                foreach (var entity in query)
+                {
+                    UpdateVehicle(entity, dt, spatialGrid);
+                }
+            }
+            else
+            {
+                // Kernel optimized parallel execution
+                query.ForEachParallel(entity =>
+                {
+                    UpdateVehicle(entity, dt, spatialGrid);
+                });
+            }
+
+            if (EnablePerformanceLogging && _perfStopwatch != null)
+            {
+                _perfStopwatch.Stop();
+                _totalUpdateTime += _perfStopwatch.Elapsed.TotalMilliseconds;
+                _updateCount++;
+                
+                if (_updateCount % 60 == 0)  // Log every 60 frames
+                {
+                    double avgMs = _totalUpdateTime / _updateCount;
+                    int vehicleCount = query.Count();
+                    double usPerVehicle = vehicleCount > 0 ? (avgMs * 1000 / vehicleCount) : 0;
+                    
+                    Console.WriteLine($"[CarKinematics] Avg: {avgMs:F2} ms, Vehicles: {vehicleCount}, μs/vehicle: {usPerVehicle:F2}");
+                }
+            }
         }
         
+        // THREAD-SAFE: Method operates on unique entity and uses read-only shared data
         private void UpdateVehicle(Entity entity, float dt, SpatialHashGrid spatialGrid)
         {
             var state = World.GetComponent<VehicleState>(entity);
@@ -184,6 +232,7 @@ namespace CarKinem.Systems
             return (target.TargetPosition, target.TargetHeading, target.TargetSpeed);
         }
         
+        // THREAD-SAFE: Read-only access to neighbors, writes only to local stack vars
         private Vector2 ApplyCollisionAvoidance(Vector2 preferredVel, Vector2 selfPos, 
             Vector2 selfVel, SpatialHashGrid spatialGrid, VehicleParams @params)
         {
