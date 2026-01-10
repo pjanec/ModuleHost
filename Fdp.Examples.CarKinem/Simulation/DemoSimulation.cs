@@ -7,6 +7,7 @@ using CarKinem.Road;
 using CarKinem.Spatial;
 using CarKinem.Systems;
 using CarKinem.Trajectory;
+using Fdp.Examples.CarKinem.Components;
 using Fdp.Kernel;
 using Fdp.Kernel.FlightRecorder;
 using ModuleHost.Core;
@@ -99,7 +100,7 @@ namespace Fdp.Examples.CarKinem.Simulation
             
             // Create systems
             _spatialSystem = new SpatialHashSystem();
-            _formationTargetSystem = new FormationTargetSystem(FormationTemplates);
+            _formationTargetSystem = new FormationTargetSystem(FormationTemplates, TrajectoryPool);
             _commandSystem = new VehicleCommandSystem();
             _kinematicsSystem = new CarKinematicsSystem(RoadNetwork, TrajectoryPool);
             
@@ -151,6 +152,7 @@ namespace Fdp.Examples.CarKinem.Simulation
             _repository.RegisterComponent<FormationMember>();
             _repository.RegisterComponent<FormationRoster>();
             _repository.RegisterComponent<FormationTarget>();
+            _repository.RegisterComponent<VehicleColor>(); // Register Color Component
             
             _repository.RegisterEvent<CmdSpawnVehicle>();
             _repository.RegisterEvent<CmdCreateFormation>();
@@ -385,6 +387,10 @@ namespace Fdp.Examples.CarKinem.Simulation
                 if (nav.HasArrived == 1)
                 {
                      // Pick new point
+                     
+                     // Use linear for new segments by default to avoid Hermite looping issues with random points
+                     // Or check existing?
+                     // Let's default to Linear for random roamers to be safe, unless we track it
                      SetDestination(id, new Vector2(_rng.Next(0,500), _rng.Next(0,500)));
                 }
             }
@@ -434,6 +440,11 @@ namespace Fdp.Examples.CarKinem.Simulation
             var preset = global::CarKinem.Core.VehiclePresets.GetPreset(vehicleClass);
             preset.Class = vehicleClass; // Set the class field
             _repository.AddComponent(e, preset);
+            
+            // Set Default Color (White/Gray) or Class Color?
+            // Let's default to standard class color, but wrapped in component
+            // We'll use GreenYellow as "Standard Spawned" default per previous request
+            _repository.AddComponent(e, VehicleColor.GreenYellow);
             
             _repository.AddComponent(e, new NavState {
                 Mode = NavigationMode.None
@@ -567,7 +578,10 @@ namespace Fdp.Examples.CarKinem.Simulation
                 
                 int id = SpawnVehicle(startNode.Position, new Vector2(1,0), vClass);
                 
+                // Assign Road User Color (Blue)
                 var entity = new Entity(id, 1);
+                _repository.SetComponent(entity, VehicleColor.Blue);
+                
                 _repository.Bus.Publish(new CmdNavigateViaRoad {
                      Entity = entity,
                      Destination = endNode.Position,
@@ -581,7 +595,14 @@ namespace Fdp.Examples.CarKinem.Simulation
             for(int i=0; i<count; i++)
             {
                  Vector2 pos = new Vector2(_rng.Next(0,500), _rng.Next(0,500));
-                 int id = SpawnVehicle(pos, Vector2.Zero, vClass);
+                 // Fix: Ensure non-zero heading to prevent static position bug
+                 Vector2 heading = new Vector2((float)_rng.NextDouble() - 0.5f, (float)_rng.NextDouble() - 0.5f);
+                 if (heading == Vector2.Zero) heading = new Vector2(1, 0);
+                 else heading = Vector2.Normalize(heading);
+
+                 int id = SpawnVehicle(pos, heading, vClass);
+                 // Assign Roamer Color (Orange)
+                 _repository.SetComponent(new Entity(id, 1), VehicleColor.Orange);
                  
                  _roamingEntities.Add(id);
                  SetDestination(id, new Vector2(_rng.Next(0,500), _rng.Next(0,500)), interpolation);
@@ -605,11 +626,11 @@ namespace Fdp.Examples.CarKinem.Simulation
                  Type = type,
                  Params = new FormationParams 
                  {
-                     Spacing = 6.0f,
+                     Spacing = 12.0f,
                      WedgeAngleRad = 0.5f,
                      MaxCatchUpFactor = 1.25f,
                      BreakDistance = 50.0f,
-                     ArrivalThreshold = 1.0f,
+                     ArrivalThreshold = 2.0f,
                      SpeedFilterTau = 1.0f
                  }
              });
@@ -626,6 +647,8 @@ namespace Fdp.Examples.CarKinem.Simulation
                  
                  int followerId = SpawnVehicle(followerPos, heading, vClass);
                  var followerEntity = new Entity(followerId, 1);
+                 // Assign Follower Color (Cyan)
+                 _repository.SetComponent(followerEntity, VehicleColor.Cyan);
                  
                  _repository.Bus.Publish(new CmdJoinFormation
                  {
@@ -639,7 +662,7 @@ namespace Fdp.Examples.CarKinem.Simulation
              // Give it a destination so they start moving
              Vector2 dest = startPos + new Vector2(200, 0);
              SetDestination(leaderId, dest, interpolation);
-        }
+         }
 
         public NavState GetNavState(int entityIndex)
         {

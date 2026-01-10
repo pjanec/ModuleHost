@@ -131,6 +131,19 @@ namespace CarKinem.Systems
                     
                 case NavigationMode.Formation:
                     (targetPos, targetHeading, targetSpeed) = GetFormationTarget(entity);
+
+                    // Drive towards the slot if not reached
+                    // This prevents "parallel driving" where vehicle maintains offset but never closes the gap
+                    float distToSlot = Vector2.Distance(state.Position, targetPos);
+                    if (distToSlot > 2.0f)
+                    {
+                        // Steer towards slot
+                        targetHeading = Vector2.Normalize(targetPos - state.Position);
+                        
+                        // Catch up speed (P-controller)
+                        targetSpeed += distToSlot * 0.5f; // Reduced gain to avoid overshooting
+                        targetSpeed = MathF.Min(targetSpeed, @params.MaxSpeedFwd);
+                    }
                     break;
                     
                 case NavigationMode.None:

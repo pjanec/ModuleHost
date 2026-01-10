@@ -2,6 +2,7 @@ using System;
 using System.Numerics;
 using CarKinem.Core;
 using CarKinem.Formation;
+using CarKinem.Trajectory;
 using Fdp.Kernel;
 
 namespace CarKinem.Systems
@@ -15,10 +16,12 @@ namespace CarKinem.Systems
     public class FormationTargetSystem : ComponentSystem
     {
         private readonly FormationTemplateManager _templateManager;
+        private readonly TrajectoryPoolManager _trajectoryPool;
         
-        public FormationTargetSystem(FormationTemplateManager templateManager)
+        public FormationTargetSystem(FormationTemplateManager templateManager, TrajectoryPoolManager trajectoryPool)
         {
             _templateManager = templateManager;
+            _trajectoryPool = trajectoryPool;
         }
         
         protected override void OnUpdate()
@@ -47,6 +50,33 @@ namespace CarKinem.Systems
             var leaderState = World.GetComponent<VehicleState>(leaderEntity);
             var template = _templateManager.GetTemplate(roster.Type);
             
+            // Default Formation Orientation (Rigid fallback)
+            Vector2 formationHeading = leaderState.Forward;
+            
+            // Trajectory Following Logic ("Ghost Rails")
+            bool hasTrajectory = false;
+            CustomTrajectory trajectory = default;
+            float leaderS = 0f;
+
+            if (World.HasComponent<NavState>(leaderEntity))
+            {
+                var nav = World.GetComponent<NavState>(leaderEntity);
+                if (nav.Mode == NavigationMode.CustomTrajectory && nav.TrajectoryId > 0)
+                {
+                     if (_trajectoryPool.TryGetTrajectory(nav.TrajectoryId, out trajectory))
+                     {
+                         hasTrajectory = true;
+                         leaderS = nav.ProgressS;
+                         
+                         // Update fallback heading to path tangent at leader position
+                         // (Still useful if we fallback for some reason)
+                         var (_, tangent, _) = _trajectoryPool.SampleTrajectory(trajectory.Id, leaderS);
+                         if (tangent != Vector2.Zero) 
+                             formationHeading = Vector2.Normalize(tangent);
+                     }
+                }
+            }
+            
             // Update each member's target
             for (int i = 1; i < roster.Count; i++) // Start at 1 (skip leader)
             {
@@ -56,10 +86,59 @@ namespace CarKinem.Systems
                     continue;
                 
                 int slotIndex = roster.GetSlotIndex(i);
+                Vector2 slotPos;
+                Vector2 slotHeading;
                 
-                // Calculate slot position
-                Vector2 slotPos = template.GetSlotPosition(slotIndex, 
-                    leaderState.Position, leaderState.Forward);
+                // Try to use Trajectory Following (Curved Formation)
+                if (hasTrajectory && template.SlotOffsets != null && slotIndex < template.SlotOffsets.Length)
+                {
+                    Vector2 offset = template.SlotOffsets[slotIndex];
+                    // offset.X = Longitudinal (Along track), offset.Y = Lateral (Right of track)
+                    
+                    float targetS = leaderS + offset.X;
+                    
+                    // Sample and Extrapolate if needed
+                    Vector2 pathPos;
+                    Vector2 pathTangent;
+                    
+                    if (trajectory.IsLooped == 0)
+                    {
+                        // Linear Extrapolation for start/end
+                        if (targetS < 0)
+                        {
+                            var (p0, t0, _) = _trajectoryPool.SampleTrajectory(trajectory.Id, 0);
+                            pathPos = p0 + t0 * targetS; // targetS is negative distance
+                            pathTangent = t0;
+                        }
+                        else if (targetS > trajectory.TotalLength)
+                        {
+                            var (pe, te, _) = _trajectoryPool.SampleTrajectory(trajectory.Id, trajectory.TotalLength);
+                            pathPos = pe + te * (targetS - trajectory.TotalLength);
+                            pathTangent = te;
+                        }
+                        else
+                        {
+                            // On path
+                            (pathPos, pathTangent, _) = _trajectoryPool.SampleTrajectory(trajectory.Id, targetS);
+                        }
+                    }
+                    else
+                    {
+                        // Looped: SampleTrajectory handles wrapping
+                        (pathPos, pathTangent, _) = _trajectoryPool.SampleTrajectory(trajectory.Id, targetS);
+                    }
+                    
+                    // Apply Lateral Offset
+                    Vector2 pathRight = new Vector2(pathTangent.Y, -pathTangent.X);
+                    slotPos = pathPos + pathRight * offset.Y;
+                    slotHeading = pathTangent;
+                }
+                else
+                {
+                    // Fallback: Rigid Body formation relative to leader's current position/heading
+                    slotPos = template.GetSlotPosition(slotIndex, leaderState.Position, formationHeading);
+                    slotHeading = formationHeading;
+                }
                 
                 // Get/create FormationTarget component
                 if (!World.HasComponent<FormationTarget>(memberEntity))
@@ -69,7 +148,7 @@ namespace CarKinem.Systems
                 
                 var target = World.GetComponent<FormationTarget>(memberEntity);
                 target.TargetPosition = slotPos;
-                target.TargetHeading = leaderState.Forward;
+                target.TargetHeading = slotHeading; 
                 target.TargetSpeed = leaderState.Speed;
                 World.SetComponent(memberEntity, target);
                 

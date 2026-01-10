@@ -31,7 +31,8 @@ namespace Fdp.Examples.CarKinem.Rendering
                 else
                 {
                     // If Hermite/Catmull, use high-resolution sampling for smooth curve
-                    RenderHermiteSmooth(trajectory, progressS, color);
+                    // Use distinct color (Orange) for Spline as requested
+                    RenderHermiteSmooth(trajectory, progressS, new Color(255, 161, 0, 200)); // Orange-ish
                 }
             }
         }

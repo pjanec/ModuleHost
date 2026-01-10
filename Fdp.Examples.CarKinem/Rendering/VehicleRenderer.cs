@@ -4,6 +4,7 @@ using Fdp.Kernel;
 using ModuleHost.Core.Abstractions;
 using ImGuiNET;
 using CarKinem.Formation;
+using Fdp.Examples.CarKinem.Components;
 
 namespace Fdp.Examples.CarKinem.Rendering
 {
@@ -28,9 +29,39 @@ namespace Fdp.Examples.CarKinem.Rendering
                 float rotationRad = MathF.Atan2(state.Forward.Y, state.Forward.X);
                 // float rotationDeg = rotationRad * (180.0f / MathF.PI);
                 
-                // Get color
-                var (r, g, b) = global::CarKinem.Core.VehiclePresets.GetColor(parameters.Class);
-                Color vehicleColor = new Color((byte)r, (byte)g, (byte)b, (byte)255);
+                // Get color based on behavior/role
+                Color vehicleColor;
+
+                // Priority 1: Component Override
+                if (view.HasComponent<VehicleColor>(entity))
+                {
+                    var c = view.GetComponentRO<VehicleColor>(entity);
+                    vehicleColor = new Color(c.R, c.G, c.B, c.A);
+                }
+                // Priority 2: Inferred Role (Fallback for backward compat or complex logic if needed)
+                else if (view.HasComponent<FormationMember>(entity))
+                {
+                    vehicleColor = new Color(0, 200, 255, 255); // Cyan
+                }
+                else if (view.HasComponent<FormationRoster>(entity))
+                {
+                    vehicleColor = new Color(255, 0, 255, 255); // Magenta
+                }
+                else if (view.HasComponent<global::CarKinem.Core.NavState>(entity))
+                {
+                    var nav = view.GetComponentRO<global::CarKinem.Core.NavState>(entity);
+                    if (nav.Mode == global::CarKinem.Core.NavigationMode.RoadGraph)
+                        vehicleColor = new Color(50, 100, 255, 255); // Blue
+                    else if (nav.Mode == global::CarKinem.Core.NavigationMode.CustomTrajectory)
+                         vehicleColor = new Color(173, 255, 47, 255); // GreenYellow (default trajectory)
+                    else
+                        vehicleColor = new Color(200, 200, 200, 255); // Gray
+                }
+                else
+                {
+                    var (r, g, b) = global::CarKinem.Core.VehiclePresets.GetColor(parameters.Class);
+                    vehicleColor = new Color((byte)r, (byte)g, (byte)b, (byte)255);
+                }
                 
                 float thickness = 0.15f; // World units
                 
@@ -144,7 +175,8 @@ namespace Fdp.Examples.CarKinem.Rendering
                         // Draw leader marker
                          Raylib.DrawCircleV(state.Position, halfWidth * 0.8f, new Color(255, 0, 255, 100));
                          // Extra ring to signify leader clearly
-                         Raylib.DrawCircleLines((int)state.Position.X, (int)state.Position.Y, halfWidth * 1.5f, Color.Magenta);
+                         // Use DrawRing for better visibility and float coordinates
+                         Raylib.DrawRing(state.Position, halfWidth * 1.3f, halfWidth * 1.6f, 0, 360, 32, Color.Magenta);
 
                         // Draw lines to followers
                         for (int i = 1; i < roster.Count; i++)
