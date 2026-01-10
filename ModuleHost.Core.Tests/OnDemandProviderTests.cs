@@ -10,7 +10,7 @@ namespace ModuleHost.Core.Tests
 {
     public class OnDemandProviderTests
     {
-        [EventId(102)]
+        [EventId(202)]
         public struct TestEvent { public int Value; }
         struct Pos { public int X; }
         struct Vel { public int X; }
@@ -251,7 +251,7 @@ namespace ModuleHost.Core.Tests
             var view2 = provider.AcquireView();
             Assert.Same(view1, view2);
         }
-        [TransientComponent]
+        [DataPolicy(DataPolicy.Transient)]
         struct TransientPos { public int X; }
 
         [Fact]

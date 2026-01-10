@@ -8,7 +8,7 @@ namespace ModuleHost.Core.Tests
 {
     public class DoubleBufferProviderTests
     {
-        [EventId(101)]
+        [EventId(201)]
         public struct TestEvent { public int Value; }
 
         struct TestComponent { public int X; }
@@ -120,7 +120,7 @@ namespace ModuleHost.Core.Tests
             Assert.Same(view, view2);
             Assert.True(view.Tick > 0); // Should be accessible and valid
         }
-        [TransientComponent]
+        [DataPolicy(DataPolicy.Transient)]
         struct TransComp { public int Val; }
         
         [Fact]

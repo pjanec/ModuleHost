@@ -46,7 +46,10 @@ public struct VehicleState
 
 **⚠️ CRITICAL: Immutability Requirement**
 
-Managed components **MUST** be **immutable records** if they will be used in snapshots (for Flight Recorder, Network, or Background Modules).
+Managed components **MUST** be **immutable records** unless explicitly marked with a `[DataPolicy]`.
+By default, mutable classes are treated as **Transient** (NoSnapshot) to prevent concurrency issues.
+
+If you need to snapshot a mutable class, use `DataPolicy.SnapshotViaClone`.
 
 ```csharp
 // ✅ CORRECT: Immutable record
@@ -97,18 +100,18 @@ You **CAN** use mutable managed components IF:
 
 **Marking Components as Transient:**
 
-**Option A: Attribute**
+**Option A: Attribute (Preferred)**
 ```csharp
-[TransientComponent]
+[DataPolicy(DataPolicy.Transient)]
 public class UIRenderCache
 {
     public Dictionary<int, Texture> Cache = new(); // Safe: main-thread only
 }
 ```
 
-**Option B: Registration Flag**
+**Option B: Registration Override**
 ```csharp
-repository.RegisterManagedComponent<UIRenderCache>(snapshotable: false);
+repository.RegisterComponent<UIRenderCache>(DataPolicy.Transient);
 ```
 
 **How Transient Components Work:**
@@ -148,7 +151,8 @@ repository.RegisterComponent<Velocity>();
 repository.RegisterManagedComponent<AIBehaviorTree>();
 
 // Register transient managed components (excluded from snapshots)
-repository.RegisterManagedComponent<UIRenderCache>(snapshotable: false);
+// Register transient managed components (excluded from snapshots)
+repository.RegisterComponent<UIRenderCache>(DataPolicy.Transient);
 ```
 
 ### NativeArrays for Static Data

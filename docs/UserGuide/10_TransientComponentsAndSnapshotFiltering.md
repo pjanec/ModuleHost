@@ -15,8 +15,9 @@
 |----------------|--------------|-----------|
 | **Struct** (unmanaged) | ✅ Yes | Value copy, thread-safe |
 | **Record** (class) | ✅ Yes | Immutable, compiler-enforced |
-| **Class** + `[TransientComponent]` | ❌ No | Mutable, main-thread only |
-| **Class** (no attribute) | ❌ **ERROR** | Must declare intent! |
+| **Class** + `[DataPolicy(DataPolicy.Transient)]` | ❌ No | Mutable, main-thread only |
+| **Class** (no attribute) | ❌ **No** | Default safety fallback (NoSnapshot) |
+| **Class** + `[DataPolicy(DataPolicy.SnapshotViaClone)]` | ✅ Yes | Safe Deep Copy |
 
 ---
 
@@ -24,7 +25,7 @@
 
 **Option 1: Attribute** (for mutable classes):
 ```csharp
-[TransientComponent]
+[DataPolicy(DataPolicy.Transient)]
 public class UIRenderCache
 {
     public Dictionary<int, Texture> TextureCache = new();
@@ -51,9 +52,9 @@ repository.RegisterComponent<PlayerStats>();
 // Class with attribute - auto-detected as transient ❌
 repository.RegisterComponent<UIRenderCache>();
 
-// Class without attribute - ERROR!
+// Class without attribute - Fallback to NoSnapshot
 repository.RegisterComponent<GameState>();
-// Throws: "Must mark with [TransientComponent] or convert to record"
+// Warning: "Mutable class 'GameState' registered without [DataPolicy]. Defaulting to NoSnapshot."
 ```
 
 ---

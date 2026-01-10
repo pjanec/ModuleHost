@@ -22,7 +22,7 @@ namespace ModuleHost.Core.Tests
             _repo.RegisterComponent<Velocity>();
             _repo.RegisterComponent<WeaponAmmo>();
             _repo.RegisterComponent<NetworkOwnership>();
-            _repo.RegisterComponent<DescriptorOwnership>(snapshotable: false); // Managed
+            _repo.RegisterComponent<DescriptorOwnership>(DataPolicy.Transient); // Managed
             _repo.RegisterComponent<NetworkIdentity>();
             _repo.RegisterComponent<NetworkTarget>();
         }

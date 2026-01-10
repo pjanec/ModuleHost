@@ -55,8 +55,10 @@ Frame 100: Full Snapshot (new baseline)
 
 3. **Mark Transient Components:**
    ```csharp
-   [TransientComponent]
+   ```csharp
+   [DataPolicy(DataPolicy.Transient)]
    public class UIRenderCache { } // Never recorded
+   ```
    ```
 
 4. **Deterministic Logic:**
@@ -75,9 +77,10 @@ Frame 100: Full Snapshot (new baseline)
 **Transient components are automatically excluded:**
 
 ```csharp
-repository.RegisterManagedComponent<UIRenderCache>(snapshotable: false);
+```csharp
+repository.RegisterComponent<UIRenderCache>(DataPolicy.Transient);
 
-// Flight Recorder uses AllSnapshotable mask
+// Flight Recorder uses OnlyRecordable component mask
 // UIRenderCache is never serialized
 // Replays are smaller and faster
 ```
