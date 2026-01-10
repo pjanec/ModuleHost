@@ -45,12 +45,39 @@ namespace Fdp.Examples.CarKinem.Rendering
                         var nav = view.GetComponentRO<global::CarKinem.Core.NavState>(entity);
                         if (nav.Mode == global::CarKinem.Core.NavigationMode.CustomTrajectory || 
                             nav.Mode == global::CarKinem.Core.NavigationMode.RoadGraph ||
-                            (nav.Mode == global::CarKinem.Core.NavigationMode.None && !nav.HasArrived.Equals(1)))
+                            (nav.Mode == global::CarKinem.Core.NavigationMode.None && !nav.HasArrived.Equals(1)) ||
+                            nav.Mode == global::CarKinem.Core.NavigationMode.Formation)
                         {
                              if (nav.Mode == global::CarKinem.Core.NavigationMode.None)
                              {
                                  Raylib.DrawLineEx(state.Position, nav.FinalDestination, 0.1f, new Color(0, 255, 255, 100));
                                  Raylib.DrawCircleV(nav.FinalDestination, 0.5f, new Color(0, 255, 255, 100));
+                             }
+                             else if (nav.Mode == global::CarKinem.Core.NavigationMode.CustomTrajectory)
+                             {
+                                 // Render trajectory path in gray
+                                 // Assuming trajectory rendering is available via separate call or we do simple preview here
+                                 // Since TrajectoryRenderer handles the full path, we might just draw a line to the next immediate target point if possible?
+                                 // But TrajectoryRenderer is separate. Here we can just draw a connector to current target.
+                                 // Let's defer full path rendering to TrajectoryRenderer in Program.cs, but draw a simple line to current target here.
+                                 
+                                 // Actually, user wants "spline path if following a spline path using thin gray line"
+                                 // This is best handled by the TrajectoryRenderer, but maybe we can trigger it here?
+                                 // No, VehicleRenderer doesn't have access to TrajectoryPool.
+                                 // So we rely on Program.cs to render the trajectory for the selected entity.
+                                 
+                                 // Program.cs ALREADY calls trajRenderer.RenderTrajectory for the selected entity.
+                                 // We just need to ensure it uses the right color (Thin Gray as requested).
+                             }
+                             else if (nav.Mode == global::CarKinem.Core.NavigationMode.Formation)
+                             {
+                                 // Draw line to formation target slot
+                                 if (view.HasComponent<FormationTarget>(entity))
+                                 {
+                                     var target = view.GetComponentRO<FormationTarget>(entity);
+                                     Raylib.DrawLineEx(state.Position, target.TargetPosition, 0.1f, new Color(200, 200, 200, 100));
+                                     Raylib.DrawCircleV(target.TargetPosition, 0.3f, new Color(200, 200, 200, 100));
+                                 }
                              }
                         }
                     }

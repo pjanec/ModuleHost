@@ -98,7 +98,33 @@ namespace Fdp.Examples.CarKinem
                     if (nav.Mode == global::CarKinem.Core.NavigationMode.CustomTrajectory)
                     {
                         // Draw with Raylib (Background layer)
-                        trajRenderer.RenderTrajectory(nav.TrajectoryId, nav.ProgressS, camera, Color.Blue);
+                        trajRenderer.RenderTrajectory(nav.TrajectoryId, nav.ProgressS, camera, new Color(180, 180, 180, 128)); // Thin Gray
+                    }
+                    else if (nav.Mode == global::CarKinem.Core.NavigationMode.Formation)
+                    {
+                        // If leader has trajectory, render it too
+                        // Need to find leader... 
+                        // FormationTarget component has leader info indirectly via position, but not ID?
+                        // Actually FormationMember has LeaderEntityId.
+                        var entity = new Fdp.Kernel.Entity(selection.SelectedEntityId.Value, 1); // Generation assumption risk
+                        // Safe way: query component
+                        if (simulation.View.HasComponent<FormationMember>(entity))
+                        {
+                            var member = simulation.View.GetComponentRO<FormationMember>(entity);
+                            // We need to access the leader entity to get ITS nav state
+                            // We don't have easy direct entity access by index without generation in View...
+                            // But we can try to guess or use the member's target as a hint.
+                            
+                            // Let's iterate all entities to find the leader? No, slow.
+                            // If we just want to render the leader's trajectory, we need the leader's ID.
+                            // member.LeaderEntityId is the index.
+                            // Let's try to get nav state for leader index.
+                            var leaderNav = simulation.GetNavState(member.LeaderEntityId);
+                            if (leaderNav.Mode == global::CarKinem.Core.NavigationMode.CustomTrajectory)
+                            {
+                                trajRenderer.RenderTrajectory(leaderNav.TrajectoryId, leaderNav.ProgressS, camera, new Color(180, 180, 180, 128));
+                            }
+                        }
                     }
                     
                     // Selection highlight handled in VehicleRenderer
