@@ -116,6 +116,7 @@ namespace CarKinem.Tests.Commands
             var repo = new EntityRepository();
             repo.RegisterComponent<NavState>();
             repo.RegisterComponent<FormationMember>();
+            repo.RegisterComponent<FormationRoster>();
             repo.RegisterEvent<CmdJoinFormation>();
             
             var system = new VehicleCommandSystem();
@@ -125,8 +126,11 @@ namespace CarKinem.Tests.Commands
             repo.AddComponent(entity, new NavState());
             // FormationMember added dynamically by system if missing
             
+            var leader = repo.CreateEntity();
+            repo.AddComponent(leader, new FormationRoster { Count = 1 });
+            
             var api = new VehicleAPI(repo);
-            api.JoinFormation(entity, formationId: 10, slotIndex: 2);
+            api.JoinFormation(entity, leaderEntity: leader, slotIndex: 2);
             
             // Playback and Swap
             var cb = ((ISimulationView)repo).GetCommandBuffer();
@@ -140,7 +144,7 @@ namespace CarKinem.Tests.Commands
             
             Assert.True(repo.HasComponent<FormationMember>(entity));
             var member = repo.GetComponent<FormationMember>(entity);
-            Assert.Equal(10, member.LeaderEntityId);
+            Assert.Equal(leader.Index, member.LeaderEntityId);
             Assert.Equal(2, member.SlotIndex);
             Assert.Equal(FormationMemberState.Rejoining, member.State);
             

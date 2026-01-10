@@ -152,6 +152,8 @@ namespace Fdp.Examples.CarKinem.Simulation
             _repository.RegisterComponent<FormationRoster>();
             _repository.RegisterComponent<FormationTarget>();
             
+            _repository.RegisterEvent<CmdSpawnVehicle>();
+            _repository.RegisterEvent<CmdCreateFormation>();
             _repository.RegisterEvent<CmdNavigateToPoint>();
             _repository.RegisterEvent<CmdFollowTrajectory>();
             _repository.RegisterEvent<CmdNavigateViaRoad>();
