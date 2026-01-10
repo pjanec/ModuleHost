@@ -15,7 +15,7 @@ namespace ModuleHost.Core.Tests.Time
         {
             // Arrange
             var bus = new FdpEventBus();
-            var controller = new MasterTimeController(bus);
+            var controller = new MasterTimeController(bus, TimeConfig.Default);
             
             // Act 1: Initial (Scale 1.0)
             var t1 = controller.Update();
@@ -54,7 +54,7 @@ namespace ModuleHost.Core.Tests.Time
         public void SetTimeScale_UpdatesScaleAndPublishesPulse()
         {
             var bus = new FdpEventBus();
-            var controller = new MasterTimeController(bus);
+            var controller = new MasterTimeController(bus, TimeConfig.Default);
             
             controller.Update(); // Initial update
             bus.SwapBuffers(); // Move published events to consumer stream if any (none expected)
@@ -84,7 +84,7 @@ namespace ModuleHost.Core.Tests.Time
              // But we can verify no pulse is sent immediately on rapid updates.
              
              var bus = new FdpEventBus();
-             var controller = new MasterTimeController(bus);
+             var controller = new MasterTimeController(bus, TimeConfig.Default);
              
              controller.Update(); // Clears initial flag? No, constructor sets lastPulse to now.
              // Wait, constructor sets _lastPulseTicks = now.
@@ -100,7 +100,7 @@ namespace ModuleHost.Core.Tests.Time
         public void GetTimeScale_ReturnsCurrentScale()
         {
             var bus = new FdpEventBus();
-            var controller = new MasterTimeController(bus);
+            var controller = new MasterTimeController(bus, TimeConfig.Default);
             Assert.Equal(1.0f, controller.GetTimeScale());
             
             controller.SetTimeScale(2.0f);

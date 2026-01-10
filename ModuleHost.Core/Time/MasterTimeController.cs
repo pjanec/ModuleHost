@@ -16,24 +16,20 @@ namespace ModuleHost.Core.Time
         private readonly TimeConfig _config;
         
         // Time state
-        private double _simTimeBase = 0.0;
-        private long _scaleChangeWallTicks = 0;
+        private double _totalTime = 0.0;
+        private double _unscaledTotalTime = 0.0;
         private float _timeScale = 1.0f;
         private long _frameNumber = 0;
         
         // Network publishing
-        private long _lastPulseTicks = 0;
+        private long _lastEventsTicks = 0;
         private static readonly long PulseIntervalTicks = Stopwatch.Frequency; // 1Hz
-        private long _lastFrameTicks = 0;
 
         public MasterTimeController(FdpEventBus eventBus, TimeConfig? config = null)
         {
             _wallClock = Stopwatch.StartNew();
             _eventBus = eventBus ?? throw new ArgumentNullException(nameof(eventBus));
             _config = config ?? TimeConfig.Default;
-            _scaleChangeWallTicks = _wallClock.ElapsedTicks;
-            _lastPulseTicks = _wallClock.ElapsedTicks;
-            _lastFrameTicks = _wallClock.ElapsedTicks; // Initialize to avoid huge delta on first frame
             
             // Register event type
             _eventBus.Register<TimePulseDescriptor>();
@@ -41,35 +37,36 @@ namespace ModuleHost.Core.Time
         
         public GlobalTime Update()
         {
+            // Calculate wall delta
+            double elapsedSeconds = _wallClock.Elapsed.TotalSeconds;
+            
+            // FIX: Reset stopwatch so next Update() measures fresh interval
+            _wallClock.Restart();
+            
             _frameNumber++;
             
-            // Calculate wall delta
-            long currentWallTicks = _wallClock.ElapsedTicks;
-            double wallDelta = (currentWallTicks - _lastFrameTicks) / (double)Stopwatch.Frequency;
-            _lastFrameTicks = currentWallTicks;
+            // Accumulate manually
+            float scaledDelta = (float)(elapsedSeconds * _timeScale);
             
-            // Calculate simulation delta (respecting scale)
-            float dt = (float)(wallDelta * _timeScale);
-            
-            // Calculate total simulation time
-            double totalTime = _simTimeBase + 
-                       (currentWallTicks - _scaleChangeWallTicks) / (double)Stopwatch.Frequency * _timeScale;
+            _totalTime += scaledDelta;
+            _unscaledTotalTime += elapsedSeconds;
             
             // Publish TimePulse (1Hz or on-change)
-            if (ShouldPublishPulse(currentWallTicks))
+            long currentTicks = Stopwatch.GetTimestamp();
+            if (ShouldPublishPulse(currentTicks))
             {
-                PublishTimePulse(currentWallTicks, totalTime);
-                _lastPulseTicks = currentWallTicks;
+                PublishTimePulse(currentTicks, _totalTime);
+                _lastEventsTicks = currentTicks;
             }
             
             return new GlobalTime
             {
                 FrameNumber = _frameNumber,
-                DeltaTime = dt,
-                TotalTime = totalTime,
+                DeltaTime = scaledDelta,
+                TotalTime = _totalTime,
                 TimeScale = _timeScale,
-                UnscaledDeltaTime = (float)wallDelta,
-                UnscaledTotalTime = _wallClock.Elapsed.TotalSeconds,
+                UnscaledDeltaTime = (float)elapsedSeconds,
+                UnscaledTotalTime = _unscaledTotalTime,
                 StartWallTicks = 0 
             };
         }
@@ -79,23 +76,16 @@ namespace ModuleHost.Core.Time
             if (scale < 0.0f)
                 throw new ArgumentException("TimeScale cannot be negative", nameof(scale));
             
-            // Save current sim time as new base
-            long currentWallTicks = _wallClock.ElapsedTicks;
-            double accumulatedTimeInSegment = (currentWallTicks - _scaleChangeWallTicks) / (double)Stopwatch.Frequency * _timeScale;
-            
-            _simTimeBase = _simTimeBase + accumulatedTimeInSegment;
-            
-            _scaleChangeWallTicks = currentWallTicks;
             _timeScale = scale;
             
             // Immediately publish to slaves
-            PublishTimePulse(currentWallTicks, _simTimeBase);
+            PublishTimePulse(Stopwatch.GetTimestamp(), _totalTime);
         }
         
         private bool ShouldPublishPulse(long currentTicks)
         {
-            // Publish every second OR immediately after scale change
-            return (currentTicks - _lastPulseTicks) >= PulseIntervalTicks;
+            // Publish every second
+            return (currentTicks - _lastEventsTicks) >= PulseIntervalTicks;
         }
         
         private void PublishTimePulse(long wallTicks, double simTime)
@@ -111,6 +101,33 @@ namespace ModuleHost.Core.Time
             _eventBus.Publish(pulse);
         }
         
+        public GlobalTime GetCurrentState()
+        {
+            return new GlobalTime
+            {
+                FrameNumber = _frameNumber,
+                DeltaTime = 0.0f,
+                TotalTime = _totalTime,
+                TimeScale = _timeScale,
+                UnscaledDeltaTime = 0.0f,
+                UnscaledTotalTime = _unscaledTotalTime
+            };
+        }
+
+        public void SeedState(GlobalTime state)
+        {
+            _frameNumber = state.FrameNumber;
+            _totalTime = state.TotalTime;
+            _unscaledTotalTime = state.UnscaledTotalTime;
+            _timeScale = state.TimeScale;
+            
+            _wallClock.Restart();
+            
+            // FORCE PULSE on next update to lock slaves immediately
+            // By setting last ticks to 'long ago'
+            _lastEventsTicks = Stopwatch.GetTimestamp() - (PulseIntervalTicks * 2); 
+        }
+
         public float GetTimeScale() => _timeScale;
         public TimeMode GetMode() => TimeMode.Continuous;
         

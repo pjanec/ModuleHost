@@ -1,125 +1,151 @@
 using System;
-using System.Diagnostics;
+using System.Collections.Generic;
+using System.Linq;
 using Fdp.Kernel;
 
 namespace ModuleHost.Core.Time
 {
     /// <summary>
-    /// Slave time controller for Deterministic (Lockstep) mode.
-    /// Waits for FrameOrder from Master before advancing.
+    /// Slave controller for Deterministic (Lockstep) mode.
+    /// Advances time only when FrameOrder is received from Master.
     /// </summary>
     public class SteppedSlaveController : ITimeController
     {
         private readonly FdpEventBus _eventBus;
         private readonly int _localNodeId;
-        private readonly float _defaultDelta;
+        private readonly float _configuredDelta;
         
-        // Frame state
-        private long _currentFrame = -1;
-        private float _fixedDelta = 0.016f;
-        private double _totalTime = 0.0;
-        private bool _hasFrameOrder = false;
-        private bool _needToSendAck = false;
+        // Time state
+        private double _totalTime;
+        private long _frameNumber;
+        private float _timeScale = 1.0f;
+        private double _unscaledTotalTime;
         
-        public SteppedSlaveController(
-            FdpEventBus eventBus,
-            int localNodeId, 
-            float defaultDelta = 0.016f)
+        // Frame Queue
+        private readonly Queue<FrameOrderDescriptor> _pendingOrders = new();
+        
+        public SteppedSlaveController(FdpEventBus eventBus, int localNodeId, float fixedDeltaSeconds)
         {
             _eventBus = eventBus ?? throw new ArgumentNullException(nameof(eventBus));
             _localNodeId = localNodeId;
-            _defaultDelta = defaultDelta;
-            _fixedDelta = defaultDelta;
+            _configuredDelta = fixedDeltaSeconds;
             
-            // Register event type
             _eventBus.Register<FrameAckDescriptor>();
-        }
-        
-        private void OnFrameOrderReceived(FrameOrderDescriptor order)
-        {
-            if (order.FrameID == _currentFrame + 1)
-            {
-                _currentFrame = order.FrameID;
-                _fixedDelta = order.FixedDelta;
-                _hasFrameOrder = true;
-            }
-            else if (order.FrameID > _currentFrame + 1)
-            {
-                Console.WriteLine($"[Lockstep Slave] Missed frame! Expected {_currentFrame + 1}, got {order.FrameID}");
-                // Snap to new frame (recovery from network hiccup)
-                _currentFrame = order.FrameID;
-                _totalTime = _currentFrame * _fixedDelta;
-                _hasFrameOrder = true;
-            }
         }
         
         public GlobalTime Update()
         {
-            // Process incoming orders
+            // 1. Refill buffer from network
             var orders = _eventBus.Consume<FrameOrderDescriptor>();
             foreach (var order in orders)
             {
-                OnFrameOrderReceived(order);
-            }
-
-            // Send ACK from previous frame (if needed)
-            if (_needToSendAck)
-            {
-                SendFrameAck();
-                _needToSendAck = false;
-            }
-            
-            if (!_hasFrameOrder)
-            {
-                // Waiting for master - don't advance
-                return new GlobalTime
+                // Only accept future frames? Or strict sequence check?
+                // For robustness, ignore old frames.
+                if (order.FrameID > _frameNumber)
                 {
-                    FrameNumber = _currentFrame,
-                    DeltaTime = 0.0f,
-                    TotalTime = _totalTime,
-                    TimeScale = 1.0f,
-                    UnscaledDeltaTime = 0,
-                    UnscaledTotalTime = (long)(_totalTime * Stopwatch.Frequency)
-                };
+                    _pendingOrders.Enqueue(order);
+                }
             }
             
-            // Execute frame
-            _totalTime += _fixedDelta;
-            _hasFrameOrder = false;
-            _needToSendAck = true;
-            
-            return new GlobalTime
+            // 2. Process one frame if available
+            if (_pendingOrders.Count > 0)
             {
-                FrameNumber = _currentFrame,
-                DeltaTime = _fixedDelta,
-                TotalTime = _totalTime,
-                TimeScale = 1.0f,
-                UnscaledDeltaTime = (long)(_fixedDelta * Stopwatch.Frequency),
-                UnscaledTotalTime = (long)(_totalTime * Stopwatch.Frequency)
-            };
+                // Peek first? Or Dequeue?
+                // We must execute ordered.
+                // Assuming Queue preserves order (it does).
+                // What if order is mixed? (UDP Reordering).
+                // In local transport/TCP, ordered. FDP event bus usually ordered locally.
+                // But distributed might be unordered.
+                // For now assume Ordered or "Next Frame is Filtered".
+                
+                // Sort?
+                // _pendingOrders is a Queue, can't sort.
+                // If we care about UDP, we should use a PriorityQueue or List.
+                // But simple Queue is efficient.
+                
+                var order = _pendingOrders.Dequeue();
+                
+                // Validate Sequence (Strict Lockstep)
+                if (order.FrameID != _frameNumber + 1)
+                {
+                    // If we missed a frame or out of order
+                    // Log warning?
+                     Console.WriteLine($"[SteppedSlave] Warning: Out of order frame. Expected {_frameNumber + 1}, got {order.FrameID}");
+                     // If future, maybe we should stash it and wait for missing?
+                     // For MVP, proceed if future.
+                }
+                
+                // Execute Step
+                float dt = order.FixedDelta; 
+                if (dt <= 0) dt = _configuredDelta;
+                
+                _frameNumber = order.FrameID;
+                _totalTime += dt * _timeScale; // Assuming Scale 1.0 logic for steps usually, but respect Order if needed?
+                // Order doesn't have Scale. Master used Scale to compute totalTime.
+                // We should use Master's notion?
+                // SteppedMaster: _totalTime += fixedDelta * _timeScale.
+                // But FrameOrder only has FixedDelta.
+                // The Slave needs to know Scale?
+                // Assume Scale is stateful.
+                
+                _unscaledTotalTime += dt;
+                
+                // Send Ack
+                SendAck(order.FrameID);
+                
+                return GetCurrentTime(dt, dt * _timeScale);
+            }
+            
+            // Frozen
+            return GetCurrentTime(0f, 0f);
         }
         
-        private void SendFrameAck()
+        private void SendAck(long frameId)
         {
             _eventBus.Publish(new FrameAckDescriptor
             {
-                FrameID = _currentFrame,
+                FrameID = frameId,
                 NodeID = _localNodeId,
-                TotalTime = _totalTime
+                Checksum = 0 // Implement hash if needed
             });
         }
         
+         private GlobalTime GetCurrentTime(float unscaledDelta, float scaledDelta)
+        {
+            return new GlobalTime
+            {
+                FrameNumber = _frameNumber,
+                DeltaTime = scaledDelta,
+                TotalTime = _totalTime,
+                TimeScale = _timeScale,
+                UnscaledDeltaTime = unscaledDelta,
+                UnscaledTotalTime = _unscaledTotalTime,
+                StartWallTicks = 0
+            };
+        }
+
+        public GlobalTime GetCurrentState() => GetCurrentTime(0, 0);
+
+        public void SeedState(GlobalTime state)
+        {
+            _frameNumber = state.FrameNumber;
+            _totalTime = state.TotalTime;
+            _unscaledTotalTime = state.UnscaledTotalTime;
+            _timeScale = state.TimeScale;
+            
+            _pendingOrders.Clear();
+        }
+
         public void SetTimeScale(float scale)
         {
-            throw new InvalidOperationException("TimeScale not supported in Deterministic mode.");
+            _timeScale = scale;
         }
-        
-        public float GetTimeScale() => 1.0f;
+
+        public float GetTimeScale() => _timeScale;
         public TimeMode GetMode() => TimeMode.Deterministic;
-        
+
         public void Dispose()
         {
-            // No unsubscription needed
         }
     }
 }

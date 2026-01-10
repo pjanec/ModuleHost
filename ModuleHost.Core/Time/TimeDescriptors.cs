@@ -1,84 +1,78 @@
-using System;
-using System.Runtime.InteropServices;
+using System.Collections.Generic;
+using MessagePack;
 using Fdp.Kernel;
 
 namespace ModuleHost.Core.Time
 {
-    /// <summary>
-    /// TimePulse descriptor for Continuous mode synchronization.
-    /// Published by Master at 1Hz + on time scale changes.
-    /// </summary>
-    [StructLayout(LayoutKind.Sequential, Pack = 8)]
-    [EventId(2003)] // Unique ID for TimePulse
+    [MessagePackObject]
+    [EventId(101)]
+    public struct FrameOrderDescriptor
+    {
+        [Key(0)]
+        public long FrameID { get; set; }
+        
+        [Key(1)]
+        public float FixedDelta { get; set; }
+        
+        [Key(2)]
+        public long SequenceID { get; set; }
+    }
+    
+    [MessagePackObject]
+    [EventId(100)]
     public struct TimePulseDescriptor
     {
-        /// <summary>
-        /// Master's high-resolution clock at snapshot time (Stopwatch ticks).
-        /// </summary>
-        public long MasterWallTicks;
+        [Key(0)]
+        public long MasterWallTicks { get; set; }
         
-        /// <summary>
-        /// Master's simulation time at snapshot moment (seconds).
-        /// </summary>
-        public double SimTimeSnapshot;
+        [Key(1)]
+        public double SimTimeSnapshot { get; set; }
         
-        /// <summary>
-        /// Current time scale (0.0 = paused, 1.0 = realtime, 2.0 = 2x speed).
-        /// </summary>
-        public float TimeScale;
+        [Key(2)]
+        public float TimeScale { get; set; }
         
-        /// <summary>
-        /// Sequence number for detecting dropped packets.
-        /// </summary>
-        public long SequenceId;
+        [Key(3)]
+        public long SequenceId { get; set; }
+    }
+    
+    [MessagePackObject]
+    [EventId(102)]
+    public struct FrameAckDescriptor
+    {
+        [Key(0)]
+        public long FrameID { get; set; }
+        
+        [Key(1)]
+        public int NodeID { get; set; }
+        
+        [Key(2)]
+        public int Checksum { get; set; } // Optional state hash for sync verification
     }
 
     /// <summary>
-    /// Frame order command from Master to Slaves (lockstep mode).
-    /// Master broadcasts this when all ACKs from Frame N-1 are received.
+    /// Network event to switch time mode across distributed system.
+    /// Published by Master, consumed by all Slaves.
     /// </summary>
-    [StructLayout(LayoutKind.Sequential, Pack = 8)]
-    [EventId(2001)] // Unique ID for FrameOrder
-    public struct FrameOrderDescriptor
+    [MessagePackObject]
+    [EventId(103)]
+    public struct SwitchTimeModeEvent
     {
-        /// <summary>
-        /// Frame number to execute.
-        /// </summary>
-        public long FrameID;
+        [Key(0)]
+        public TimeMode TargetMode { get; set; }  // Continuous or Deterministic
         
-        /// <summary>
-        /// Fixed delta time for this frame (seconds).
-        /// Usually constant (e.g., 16.67ms for 60Hz).
-        /// </summary>
-        public float FixedDelta;
+        [Key(1)]
+        public long FrameNumber { get; set; }  // Current frame for synchronization
         
-        /// <summary>
-        /// Sequence number for reliability check.
-        /// </summary>
-        public long SequenceID;
-    }
-    
-    /// <summary>
-    /// Frame ACK from Slave to Master (lockstep mode).
-    /// Slave sends this AFTER completing frame execution.
-    /// </summary>
-    [StructLayout(LayoutKind.Sequential, Pack = 8)]
-    [EventId(2002)] // Unique ID for FrameAck
-    public struct FrameAckDescriptor
-    {
-        /// <summary>
-        /// Frame number that was completed.
-        /// </summary>
-        public long FrameID;
+        [Key(2)]
+        public double TotalTime { get; set; }  // Current simulation time
         
-        /// <summary>
-        /// Node ID of sender.
-        /// </summary>
-        public int NodeID;
+        // Removed to satisfy unmanaged constraint
+        // public HashSet<int>? AllNodeIds { get; set; }
         
-        /// <summary>
-        /// Simulation time at end of frame (for verification).
-        /// </summary>
-        public double TotalTime;
+        [Key(3)]
+        public float FixedDeltaSeconds { get; set; }  // For Deterministic mode
+        
+        [Key(4)]
+        public long BarrierFrame { get; set; } // Frame at which to switch (0 = immediate)
     }
 }

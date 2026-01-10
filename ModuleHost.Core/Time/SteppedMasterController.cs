@@ -1,145 +1,147 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using Fdp.Kernel;
 
 namespace ModuleHost.Core.Time
 {
     /// <summary>
-    /// Master time controller for Deterministic (Lockstep) mode.
-    /// Waits for all peer ACKs before advancing to next frame.
+    /// Master controller for Deterministic (Lockstep) mode.
+    /// Advances time manually via Step() and coordinates Slaves via FrameOrder/Ack.
     /// </summary>
     public class SteppedMasterController : ITimeController
     {
         private readonly FdpEventBus _eventBus;
-        private readonly HashSet<int> _allNodeIds;
-        private readonly float _fixedDelta;
-        private readonly TimeConfig _config;
+        private readonly HashSet<int> _slaveNodeIds;
+        private readonly TimeConfig _config; // Using TimeConfig for simplicity (TimeControllerConfig passes this)
         
-        // Frame state
-        private long _currentFrame = 0;
+        // Time state
+        private double _totalTime;
+        private long _frameNumber;
+        private float _timeScale = 1.0f;
+        private double _unscaledTotalTime;
+        
+        // Lockstep state
+        private bool _waitingForAcks;
         private HashSet<int> _pendingAcks;
-        private bool _waitingForAcks = false;
-        private double _totalTime = 0.0;
+        private long _lastFrameSequence;
         
-        // Diagnostics
-        private DateTime _frameStartTime;
-        private Dictionary<int, DateTime> _lastAckTimes = new();
-        
-        public SteppedMasterController(
-            FdpEventBus eventBus,
-            HashSet<int> nodeIds, 
-            TimeConfig config = null)
+        public SteppedMasterController(FdpEventBus eventBus, HashSet<int> nodeIds, TimeConfig config) // Changed signature to match usage
         {
             _eventBus = eventBus ?? throw new ArgumentNullException(nameof(eventBus));
-            _allNodeIds = nodeIds ?? throw new ArgumentNullException(nameof(nodeIds));
+            _slaveNodeIds = nodeIds ?? throw new ArgumentNullException(nameof(nodeIds));
             _config = config ?? TimeConfig.Default;
+            _pendingAcks = new HashSet<int>();
             
-            // Validate node set
-            if (nodeIds.Count == 0)
-                throw new ArgumentException("NodeIds cannot be empty for lockstep mode", nameof(nodeIds));
-
-            _fixedDelta = _config.FixedDeltaSeconds;
-            _pendingAcks = new HashSet<int>(_allNodeIds);
-            
-            // Register event type to ensure stream exists
+            // Register messaging
             _eventBus.Register<FrameOrderDescriptor>();
         }
         
+        // Ctor overload to match Task 6 signature: (bus, ids, TimeControllerConfig) 
+        // Note: TimeControllerConfig contains inner SyncConfig
+        public SteppedMasterController(FdpEventBus eventBus, HashSet<int> nodeIds, TimeControllerConfig configWrapper)
+             : this(eventBus, nodeIds, configWrapper?.SyncConfig ?? TimeConfig.Default)
+        {
+        }
+
         public GlobalTime Update()
         {
-            // Process incoming ACKs
+            // Process any incoming ACKs
             var acks = _eventBus.Consume<FrameAckDescriptor>();
-            foreach (var ack in acks)
-            {
-                OnFrameAckReceived(ack);
-            }
-
-            if (_waitingForAcks)
-            {
-                // Check if all ACKs received
-                if (_pendingAcks.Count == 0)
-                {
-                    // All nodes finished Frame N-1, advance to Frame N
-                    _currentFrame++;
-                    _waitingForAcks = false;
-                    
-                    // Reset pending ACKs
-                    _pendingAcks = new HashSet<int>(_allNodeIds);
-                    _frameStartTime = DateTime.UtcNow;
-                }
-                else
-                {
-                    // Still waiting - don't advance simulation
-                    return new GlobalTime
-                    {
-                        FrameNumber = _currentFrame,
-                        DeltaTime = 0.0f,
-                        TotalTime = _totalTime,
-                        TimeScale = 1.0f,
-                        UnscaledDeltaTime = 0,
-                        UnscaledTotalTime = (long)(_totalTime * Stopwatch.Frequency)
-                    };
-                }
-            }
+            foreach(var ack in acks) OnAckReceived(ack);
             
-            // Publish order for current frame
-            _eventBus.Publish(new FrameOrderDescriptor
-            {
-                FrameID = _currentFrame,
-                FixedDelta = _fixedDelta,
-                SequenceID = _currentFrame
-            });
-
-            //Execute this frame
-            _totalTime += _fixedDelta;
-            _waitingForAcks = true;
-            
-            return new GlobalTime
-            {
-                FrameNumber = _currentFrame,
-                DeltaTime = _fixedDelta,
-                TotalTime = _totalTime,
-                TimeScale = 1.0f,
-                UnscaledDeltaTime = (long)(_fixedDelta * Stopwatch.Frequency),
-                UnscaledTotalTime = (long)(_totalTime * Stopwatch.Frequency)
-            };
+            // In lockstep master, Update() just returns the current frozen time.
+            // Advancement happens ONLY via Step().
+            return GetCurrentTime();
         }
         
-        private void OnFrameAckReceived(FrameAckDescriptor ack)
+        /// <summary>
+        /// Manually advance one frame.
+        /// </summary>
+        public GlobalTime Step(float fixedDeltaTime)
         {
-            if (ack.FrameID == _currentFrame)
+            // Check previous ACKs
+            if (_waitingForAcks && _pendingAcks.Count > 0)
             {
-                _pendingAcks.Remove(ack.NodeID);
-                _lastAckTimes[ack.NodeID] = DateTime.UtcNow;
-                
-                // Diagnostics
-                if (_pendingAcks.Count == 0)
+                 // Logic: Do we block? Or just warn?
+                 // For interactive stepping (User clicks Button), we usually override.
+                 Console.WriteLine($"[SteppedMaster] Warning: Stepping frame {_frameNumber+1} before all ACKs received for {_frameNumber}. Missing: {string.Join(",", _pendingAcks)}");
+            }
+            
+            _frameNumber++;
+            _totalTime += fixedDeltaTime * _timeScale;
+            _unscaledTotalTime += fixedDeltaTime;
+            
+            _lastFrameSequence = _frameNumber;
+            
+            // Reset ACKs
+            _pendingAcks = new HashSet<int>(_slaveNodeIds);
+            _waitingForAcks = true;
+            
+            // Publish Order
+            _eventBus.Publish(new FrameOrderDescriptor
+            {
+                FrameID = _frameNumber,
+                FixedDelta = fixedDeltaTime,
+                SequenceID = _frameNumber
+            });
+            
+            return GetCurrentTime(fixedDeltaTime, fixedDeltaTime * _timeScale);
+        }
+        
+        private void OnAckReceived(FrameAckDescriptor ack)
+        {
+            if (ack.FrameID == _lastFrameSequence)
+            {
+                if (_pendingAcks.Remove(ack.NodeID))
                 {
-                    var totalWait = (DateTime.UtcNow - _frameStartTime).TotalMilliseconds;
-                    if (totalWait > _config.SnapThresholdMs)
+                    if (_pendingAcks.Count == 0)
                     {
-                        Console.WriteLine($"[Lockstep] Frame {_currentFrame} took {totalWait:F1}ms (threshold: {_config.SnapThresholdMs}ms)");
+                        _waitingForAcks = false;
+                        // Console.WriteLine($"[SteppedMaster] Frame {_lastFrameSequence} confirmed by all slaves.");
                     }
                 }
             }
-            else if (ack.FrameID < _currentFrame)
-            {
-                Console.WriteLine($"[Lockstep] Late ACK from Node {ack.NodeID}: Frame {ack.FrameID} (current: {_currentFrame})");
-            }
         }
         
+        private GlobalTime GetCurrentTime(float unscaledDelta = 0f, float scaledDelta = 0f)
+        {
+            return new GlobalTime
+            {
+                FrameNumber = _frameNumber,
+                DeltaTime = scaledDelta,
+                TotalTime = _totalTime,
+                TimeScale = _timeScale,
+                UnscaledDeltaTime = unscaledDelta,
+                UnscaledTotalTime = _unscaledTotalTime,
+                StartWallTicks = 0
+            };
+        }
+
+        public GlobalTime GetCurrentState() => GetCurrentTime();
+
+        public void SeedState(GlobalTime state)
+        {
+            _frameNumber = state.FrameNumber;
+            _totalTime = state.TotalTime;
+            _unscaledTotalTime = state.UnscaledTotalTime;
+            _timeScale = state.TimeScale;
+            
+            _pendingAcks.Clear();
+            _waitingForAcks = false;
+        }
+
         public void SetTimeScale(float scale)
         {
-            throw new InvalidOperationException("TimeScale not supported in Deterministic mode.");
+            _timeScale = scale;
         }
-        
-        public float GetTimeScale() => 1.0f;
+
+        public float GetTimeScale() => _timeScale;
         public TimeMode GetMode() => TimeMode.Deterministic;
-        
+
         public void Dispose()
         {
-            // No unsubscription needed for FdpEventBus
+            // clean up subscriptions? EventBus might hold weak refs or we should unsubscribe?
+            // FdpEventBus typical pattern doesn't mandate unsubscribe if transient, but good practice.
         }
     }
 }

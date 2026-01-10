@@ -10,7 +10,7 @@ namespace ModuleHost.Core.Tests.Time
         public void Update_WaitsForFrameOrder_BeforeAdvancing()
         {
             var bus = new FdpEventBus();
-            var slave = new SteppedSlaveController(bus, 1);
+            var slave = new SteppedSlaveController(bus, 1, 0.016f);
             
             // No order published
             bus.SwapBuffers();
@@ -23,7 +23,7 @@ namespace ModuleHost.Core.Tests.Time
         public void Update_ExecutesFrame_WhenOrderReceived()
         {
             var bus = new FdpEventBus();
-            var slave = new SteppedSlaveController(bus, 1);
+            var slave = new SteppedSlaveController(bus, 1, 0.016f);
             
             // Publish Order 0
             bus.Publish(new FrameOrderDescriptor { FrameID = 0, FixedDelta = 0.016f });
@@ -38,7 +38,7 @@ namespace ModuleHost.Core.Tests.Time
         public void Update_SendsAck_AfterFrameComplete()
         {
             var bus = new FdpEventBus();
-            var slave = new SteppedSlaveController(bus, 1);
+            var slave = new SteppedSlaveController(bus, 1, 0.016f);
             
             // Execute Frame 0
             bus.Publish(new FrameOrderDescriptor { FrameID = 0, FixedDelta = 0.016f });

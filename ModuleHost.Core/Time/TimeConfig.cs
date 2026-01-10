@@ -48,5 +48,12 @@ namespace ModuleHost.Core.Time
         /// If exceeded, log warning (but still wait).
         /// </summary>
         public double LockstepTimeoutMs { get; set; } = 1000.0;  // 1 second
+        
+        /// <summary>
+        /// Number of frames to plan ahead for distributed pause barrier.
+        /// Higher values = safer for high jitter networks.
+        /// Lower values = faster pause response.
+        /// </summary>
+        public int PauseBarrierFrames { get; set; } = 10;
     }
 }

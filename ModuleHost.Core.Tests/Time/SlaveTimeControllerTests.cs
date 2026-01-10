@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Collections.Generic;
 using ModuleHost.Core.Time;
+using ModuleHost.Core.Network; // For TimePulseDescriptor
 using Fdp.Kernel;
 using Xunit;
 
@@ -22,7 +23,8 @@ namespace ModuleHost.Core.Tests.Time
         [Fact]
         public void Update_AdvancesTimeUsingLocalClock()
         {
-            var controller = new SlaveTimeController(new FdpEventBus(), TimeConfig.Default, GetTicks);
+            var bus = new FdpEventBus();
+            var controller = new SlaveTimeController(bus, TimeConfig.Default, GetTicks);
             
             AdvanceTime(0.1);
             var t = controller.Update();
@@ -39,11 +41,12 @@ namespace ModuleHost.Core.Tests.Time
             var config = new TimeConfig 
             { 
                PLLGain = 1.0, // Aggressive for test
-               MaxSlew = 0.5,
+               MaxSlew = 0.5f, // Was 0.5 double, float required? TimeConfig def uses float.
                AverageLatencyTicks = 0
             };
 
-            var controller = new SlaveTimeController(new FdpEventBus(), config, GetTicks);
+            var bus = new FdpEventBus();
+            var controller = new SlaveTimeController(bus, config, GetTicks);
             
             AdvanceTime(0.1);
             
@@ -53,24 +56,27 @@ namespace ModuleHost.Core.Tests.Time
             AdvanceTime(0.1); 
             
             // Pulse suggests we should be ahead (due to latency expectation)
-            controller.OnTimePulseReceived(new TimePulseDescriptor { MasterWallTicks = 0, TimeScale = 1.0f });
+            bus.Publish(new TimePulseDescriptor { MasterWallTicks = 0, TimeScale = 1.0f });
+            bus.SwapBuffers();
             
             float dt = controller.Update().DeltaTime;
             
             // Expected dt > 0.1 because we speed up
-            Assert.True(dt > 0.1f);
+            Assert.True(dt > 0.1f, $"dt {dt} should be > 0.1");
         }
         
         [Fact]
         public void Update_CalculatesTotalTimeRespectingScale()
         {
-            var controller = new SlaveTimeController(new FdpEventBus(), TimeConfig.Default, GetTicks);
+            var bus = new FdpEventBus();
+            var controller = new SlaveTimeController(bus, TimeConfig.Default, GetTicks);
             
             AdvanceTime(0.1);
             double total = controller.Update().TotalTime;
             Assert.Equal(0.1, total, precision: 2);
             
-            controller.OnTimePulseReceived(new TimePulseDescriptor { TimeScale = 2.0f });
+            bus.Publish(new TimePulseDescriptor { TimeScale = 2.0f });
+            bus.SwapBuffers();
             
             AdvanceTime(0.1);
             total = controller.Update().TotalTime;
@@ -83,14 +89,16 @@ namespace ModuleHost.Core.Tests.Time
         public void OnTimePulse_HardSnap_ResetVirtualClock()
         {
             var config = new TimeConfig { SnapThresholdMs = 100 };
-            var controller = new SlaveTimeController(new FdpEventBus(), config, GetTicks);
+            var bus = new FdpEventBus();
+            var controller = new SlaveTimeController(bus, config, GetTicks);
             
             AdvanceTime(1.0);
             controller.Update();
             
             AdvanceTime(5.0);
             // Trigger Hard Snap
-            controller.OnTimePulseReceived(new TimePulseDescriptor { MasterWallTicks = 0, TimeScale = 1.0f });
+            bus.Publish(new TimePulseDescriptor { MasterWallTicks = 0, TimeScale = 1.0f });
+            bus.SwapBuffers();
             
             AdvanceTime(0.1);
             var t = controller.Update();

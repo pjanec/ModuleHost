@@ -23,7 +23,21 @@ namespace Fdp.Examples.CarKinem.Simulation
         
         public bool IsRecording { get; set; } = true;
         public bool IsReplaying { get; private set; } = false;
-        public bool IsPaused { get; set; } = false;
+        
+        private bool _isPaused = false;
+        public bool IsPaused 
+        { 
+            get => _isPaused; 
+            set 
+            {
+                if (_isPaused != value)
+                {
+                    _isPaused = value;
+                    OnPauseChanged(value);
+                }
+            } 
+        }
+        
         public bool SingleStep { get; set; } = false;
         
         private int _totalRecordedFrames = 0;
@@ -49,8 +63,16 @@ namespace Fdp.Examples.CarKinem.Simulation
         public ISimulationView View => _repository;
         public EntityRepository Repository => _repository;
         
-        public DemoSimulation()
+        // Distributed components
+        private readonly TimeControllerConfig _timeConfig;
+        private DistributedTimeCoordinator? _timeCoordinator;
+        private SlaveTimeModeListener? _slaveListener;
+        public DistributedTimeCoordinator? TimeCoordinator => _timeCoordinator; // Expose for testing/control
+        
+        public DemoSimulation(TimeControllerConfig? timeConfig = null)
         {
+            _timeConfig = timeConfig ?? new TimeControllerConfig { Role = TimeRole.Standalone };
+            
             _repository = new EntityRepository();
             Recorder = new AsyncRecorder("demo_recording.fdp");
             // PlaybackController initialized only on Replay start
@@ -84,10 +106,22 @@ namespace Fdp.Examples.CarKinem.Simulation
             // Initialize ModuleHost kernel
             _kernel = new ModuleHostKernel(_repository, _eventAccumulator);
             
-            // Configure Time (Standalone with manual scaling)
-            _kernel.ConfigureTime(new TimeControllerConfig { Role = TimeRole.Standalone });
+            // Configure Time
+            _kernel.ConfigureTime(_timeConfig);
             
             _kernel.Initialize(); 
+            
+            // Initialize Synchronization Logic
+            if (_timeConfig.Role == TimeRole.Master || _timeConfig.Role == TimeRole.Standalone)
+            {
+                // Standalone acts as Master with no slaves by default, but ready for logic
+                var slaveIds = _timeConfig.AllNodeIds ?? new HashSet<int>();
+                _timeCoordinator = new DistributedTimeCoordinator(_repository.Bus, _kernel, _timeConfig, slaveIds);
+            }
+            else
+            {
+                _slaveListener = new SlaveTimeModeListener(_repository.Bus, _kernel, _timeConfig);
+            }
             
             // Initialize systems manually
             _spatialSystem.Create(_repository);
@@ -129,6 +163,30 @@ namespace Fdp.Examples.CarKinem.Simulation
         
         public int StepFrames { get; set; }
 
+        private void OnPauseChanged(bool paused)
+        {
+            if (IsReplaying) return; // Replay handles pause locally via PlaybackController
+
+            if (paused)
+            {
+                // PAUSE: Switch to Deterministic
+                if (_timeCoordinator != null)
+                {
+                    // Get slave IDs from config
+                    var slaveIds = _timeConfig.AllNodeIds ?? new HashSet<int>();
+                    _timeCoordinator.SwitchToDeterministic(slaveIds);
+                }
+            }
+            else
+            {
+                // UNPAUSE: Switch to Continuous
+                if (_timeCoordinator != null)
+                {
+                    _timeCoordinator.SwitchToContinuous();
+                }
+            }
+        }
+
         public void Tick(float deltaTime, float timeScale)
         {
             // Replay Mode
@@ -151,9 +209,33 @@ namespace Fdp.Examples.CarKinem.Simulation
             }
 
             // Live / Recording Mode
-            if (IsPaused && StepFrames <= 0) return;
-            if (StepFrames > 0) StepFrames--;
-            // SingleStep = false; // logic replaced by decrement above
+            // Update distributed coordinators
+            _timeCoordinator?.Update();
+            _slaveListener?.Update();
+            
+            if (IsPaused && StepFrames > 0)
+            {
+                 // Handle Stepping
+                 // Only step if we are actually in Deterministic mode (pause completed)
+                 if (_kernel.GetTimeController().GetMode() == TimeMode.Deterministic)
+                 {
+                     const float FIXED_STEP_DT = 1.0f / 60.0f;
+                     _kernel.StepFrame(FIXED_STEP_DT);
+                     StepFrames--;
+                 }
+                 else
+                 {
+                     // Still coasting to barrier -> Normal Update
+                     _kernel.Update();
+                 }
+            }
+            else
+            {
+                // Normal Update
+                // If Continuous: Advances time
+                // If Deterministic (Paused): Returns frozen time (delta 0)
+                _kernel.Update();
+            }
             
             // Required for Versioning to work with AsyncRecorder
             // _repository.Tick(); // Handled by _kernel.Update
@@ -168,8 +250,15 @@ namespace Fdp.Examples.CarKinem.Simulation
             // If we wanted to FORCE deltaTime, we'd need Stepped mode or Manual update.
             // For now, we trust the controller (Stopwatch) to be accurate.
             
-            _kernel.SetTimeScale(timeScale);
-            _kernel.Update();
+            if (_timeConfig.Role != TimeRole.Slave)
+            {
+                _kernel.SetTimeScale(timeScale);
+            }
+            
+            // _timeCoordinator?.Update(); // Already called above
+            // _slaveListener?.Update();   // Already called above
+            
+            // _kernel.Update(); // Already called above
 
             // Manual System Updates (if not registered as Modules)
             // Ideally these should be modules, but legacy structure is fine.

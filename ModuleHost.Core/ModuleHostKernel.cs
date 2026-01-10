@@ -768,6 +768,75 @@ namespace ModuleHost.Core
             _schemaSetup = setup;
         }
         
+        /// <summary>
+        /// Swap the time controller at runtime (e.g., pause/unpause in distributed systems).
+        /// Transfers state from old to new controller.
+        /// </summary>
+        public void SwapTimeController(ITimeController newController)
+        {
+            if (newController == null)
+                throw new ArgumentNullException(nameof(newController));
+            
+            if (!_initialized)
+                throw new InvalidOperationException("Cannot swap controller before Initialize()");
+            
+            // Get current state from old controller
+            var currentState = _timeController!.GetCurrentState();
+            
+            // Seed new controller with current state
+            newController.SeedState(currentState);
+            
+            // Dispose old controller
+            _timeController?.Dispose();
+            
+            // Install new controller
+            _timeController = newController;
+            
+            // Update CurrentTime property
+            CurrentTime = currentState;
+            
+            Console.WriteLine($"[TimeController] Swapped to {newController.GetType().Name}, " +
+                             $"TotalTime={currentState.TotalTime:F3}s, Frame={currentState.FrameNumber}");
+        }
+        
+        /// <summary>
+        /// Get current time controller (for inspection/debugging).
+        /// </summary>
+        public ITimeController GetTimeController()
+        {
+            if (!_initialized)
+                throw new InvalidOperationException("Time controller not initialized yet");
+            
+            return _timeController!;
+        }
+
+        /// <summary>
+        /// Manually advance a single frame (Stepped/Paused mode).
+        /// </summary>
+        public void StepFrame(float deltaTime)
+        {
+            if (!_initialized) throw new InvalidOperationException("Not initialized");
+            
+            GlobalTime time;
+            
+            // Support different stepping controllers
+            if (_timeController is SteppedMasterController steppedMaster)
+            {
+                time = steppedMaster.Step(deltaTime);
+            }
+            else if (_timeController is SteppingTimeController steppingTool)
+            {
+                time = steppingTool.Step(deltaTime);
+            }
+            else
+            {
+                 throw new InvalidOperationException($"Current controller {_timeController?.GetType().Name} does not support manual stepping.");
+            }
+            
+            CurrentTime = time;
+            UpdateInternal(time.DeltaTime, time);
+        }
+        
         public void Dispose()
         {
             // Dispose all providers

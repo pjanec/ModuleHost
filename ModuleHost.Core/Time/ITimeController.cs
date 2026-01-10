@@ -30,6 +30,16 @@ namespace ModuleHost.Core.Time
         /// Get current mode (Continuous or Deterministic).
         /// </summary>
         TimeMode GetMode();
+        
+        /// <summary>
+        /// Get current time state for transfer/save.
+        /// </summary>
+        GlobalTime GetCurrentState();
+        
+        /// <summary>
+        /// Initialize controller with specific time state.
+        /// </summary>
+        void SeedState(GlobalTime state);
     }
     
     /// <summary>
