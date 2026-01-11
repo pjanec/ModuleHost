@@ -56,7 +56,7 @@ namespace ModuleHost.Core.Network.Translators
                 return;
             }
             
-            // Get current owner for logging
+            // Get current owner for logging and logic
             var previousOwner = view.GetDescriptorOwner(entity, update.DescrTypeId);
             
             // Update ownership
@@ -85,27 +85,32 @@ namespace ModuleHost.Core.Network.Translators
                 cmd.SetComponent(entity, newNw);
             }
             
-            /* 
-            // Update FDP component metadata
-            // Note: ISimulationView does not expose GetComponentTable, and Metadata is per-type, not per-entity.
-            // Skipping as per architectural review.
-            var componentTypes = _ownershipMap.GetComponentsForDescriptor(update.DescrTypeId);
-            foreach (var componentType in componentTypes)
-            {
-               // logic removed
-            } 
-            */
+            // ★ NEW: Emit DescriptorAuthorityChanged event
+            bool isNowOwner = (update.NewOwner == _localNodeId);
+            bool wasOwner = (previousOwner == _localNodeId);
             
-            var isBecomingOwner = update.NewOwner == _localNodeId;
-            var isLosingOwnership = previousOwner == _localNodeId && update.NewOwner != _localNodeId;
-            
-            if (isBecomingOwner)
+            if (isNowOwner != wasOwner)
             {
-                Console.WriteLine($"[Ownership] Acquired descriptor {update.DescrTypeId} for entity {update.EntityId}");
+                // Ownership transition occurred
+                var evt = new DescriptorAuthorityChanged
+                {
+                    Entity = entity,
+                    DescriptorTypeId = update.DescrTypeId,
+                    IsNowOwner = isNowOwner,
+                    NewOwnerId = update.NewOwner
+                };
+                
+                cmd.PublishEvent(evt);
+                
+                Console.WriteLine($"[Ownership] Entity {entity.Index} descriptor {update.DescrTypeId}: " +
+                    $"{(isNowOwner ? "ACQUIRED" : "LOST")} ownership (new owner: {update.NewOwner})");
             }
-            else if (isLosingOwnership)
+            
+            // ★ NEW: Add ForceNetworkPublish if we became owner (SST confirmation write)
+            if (isNowOwner)
             {
-                Console.WriteLine($"[Ownership] Lost descriptor {update.DescrTypeId} for entity {update.EntityId}");
+                cmd.SetComponent(entity, new ForceNetworkPublish());
+                Console.WriteLine($"[Ownership] Entity {entity.Index}: Force publish scheduled for confirmation");
             }
         }
         

@@ -78,7 +78,12 @@ namespace ModuleHost.Core.Network.Translators
                  return entity;
              }
              
-             var query = view.Query().With<NetworkIdentity>().IncludeConstructing().Build();
+             // ★ CHANGED: Include Ghost entities in search
+             var query = view.Query()
+                 .With<NetworkIdentity>()
+                 .IncludeAll()  // Include all lifecycle states
+                 .Build();
+             
              foreach(var e in query)
              {
                  var comp = view.GetComponentRO<NetworkIdentity>(e);
@@ -90,6 +95,7 @@ namespace ModuleHost.Core.Network.Translators
                  }
              }
              
+             // Not found - cleanup stale mapping
              if (_networkIdToEntity.ContainsKey(networkId))
              {
                  _networkIdToEntity.Remove(networkId);
@@ -103,32 +109,43 @@ namespace ModuleHost.Core.Network.Translators
             IEntityCommandBuffer cmd, 
             ISimulationView view)
         {
-            var entity = cmd.CreateEntity();
-            cmd.SetLifecycleState(entity, EntityLifecycle.Constructing);
+            // Cast to EntityRepository for direct access
+            var repo = view as EntityRepository;
+            if (repo == null)
+            {
+                throw new InvalidOperationException(
+                    "EntityStateTranslator requires direct EntityRepository access. " +
+                    "NetworkGateway must run with ExecutionPolicy.Synchronous().");
+            }
             
-            cmd.SetComponent(entity, new Position { Value = desc.Location });
-            cmd.SetComponent(entity, new Velocity { Value = desc.Velocity });
-            cmd.SetComponent(entity, new NetworkIdentity { Value = desc.EntityId });
+            // Direct entity creation (immediate ID)
+            var entity = repo.CreateEntity();
             
-            // Set NetworkOwnership (Unmanaged)
-            cmd.SetComponent(entity, new NetworkOwnership
+            // ★ NEW: Create as GHOST (not Constructing)
+            repo.SetLifecycleState(entity, EntityLifecycle.Ghost);
+            
+            // Set initial network state
+            repo.AddComponent(entity, new Position { Value = desc.Location });
+            repo.AddComponent(entity, new Velocity { Value = desc.Velocity });
+            repo.AddComponent(entity, new NetworkIdentity { Value = desc.EntityId });
+            
+            // Set ownership
+            repo.AddComponent(entity, new NetworkOwnership
             {
                 PrimaryOwnerId = desc.OwnerId,
                 LocalNodeId = _localNodeId
             });
             
-            // Set DescriptorOwnership (Managed) - Empty initially as we fall back to PrimaryOwner
-            // But if we want to be explicit, map ENTITY_STATE -> desc.OwnerId
-            // Convention: If not in map, use Primary. So empty is fine.
-            cmd.AddManagedComponent(entity, new DescriptorOwnership());
+            // Initialize empty descriptor ownership map
+            repo.SetManagedComponent(entity, new DescriptorOwnership());
             
-            cmd.SetComponent(entity, new NetworkTarget
+            repo.AddComponent(entity, new NetworkTarget
             {
                 Value = desc.Location,
                 Timestamp = desc.Timestamp
             });
             
-            Console.WriteLine($"[EntityStateTranslator] Created entity {(long)entity.PackedValue} from network ID {desc.EntityId}");
+            Console.WriteLine($"[EntityStateTranslator] Created GHOST entity {entity.Index} from network ID {desc.EntityId}");
             
             return entity;
         }

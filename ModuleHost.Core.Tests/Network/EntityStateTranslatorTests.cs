@@ -59,7 +59,7 @@ namespace ModuleHost.Core.Tests.Network
             ((EntityCommandBuffer)cmd).Playback(_repo);
             
             // Verify entity created
-            var query = View.Query().With<Position>().IncludeConstructing().Build();
+            var query = View.Query().With<Position>().IncludeAll().Build();
             var entities = new List<Entity>();
             foreach (var e in query) entities.Add(e);
             
@@ -166,7 +166,7 @@ namespace ModuleHost.Core.Tests.Network
             ((EntityCommandBuffer)cmd).Playback(_repo);
             
             // Query the created entity
-            var query = View.Query().With<Position>().IncludeConstructing().Build();
+            var query = View.Query().With<Position>().IncludeAll().Build();
             Entity entity = Entity.Null;
             foreach(var e in query) entity = e;
             

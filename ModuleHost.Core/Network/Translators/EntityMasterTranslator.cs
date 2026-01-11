@@ -25,6 +25,15 @@ namespace ModuleHost.Core.Network.Translators
         
         public void PollIngress(IDataReader reader, IEntityCommandBuffer cmd, ISimulationView view)
         {
+            // Cast for direct repository access
+            var repo = view as EntityRepository;
+            if (repo == null)
+            {
+                throw new InvalidOperationException(
+                    "EntityMasterTranslator requires direct EntityRepository access. " +
+                    "NetworkGateway must run with ExecutionPolicy.Synchronous().");
+            }
+            
             foreach (var sample in reader.TakeSamples())
             {
                 if (sample.InstanceState == DdsInstanceState.NotAliveDisposed)
@@ -33,37 +42,73 @@ namespace ModuleHost.Core.Network.Translators
                     continue;
                 }
                 
-                if (sample.Data is EntityMasterDescriptor desc)
+                if (sample.Data is not EntityMasterDescriptor desc)
                 {
-                    // Handle Creation / Update
-                    // Logic similar to EntityStateTranslator?
-                    // Typically EntityMaster creates the entity if it doesn't exist.
-                    // But EntityStateTranslator also does that?
-                    // Order is not guaranteed.
-                    // If EntityStateTranslator created it, we just update.
+                    if (sample.InstanceState == DdsInstanceState.Alive)
+                        Console.Error.WriteLine($"[EntityMasterTranslator] Unexpected sample type: {sample.Data?.GetType().Name}");
+                    continue;
+                }
+                
+                // Check if entity already exists (could be Ghost from EntityState)
+                Entity entity;
+                bool isNewEntity = false;
+                
+                if (!_networkIdToEntity.TryGetValue(desc.EntityId, out entity) || !view.IsAlive(entity))
+                {
+                    // Entity doesn't exist - create it directly (Master-first scenario)
+                    entity = repo.CreateEntity();
+                    isNewEntity = true;
                     
-                    if (!_networkIdToEntity.TryGetValue(desc.EntityId, out var entity))
+                    // Set NetworkIdentity
+                    repo.AddComponent(entity, new NetworkIdentity { Value = desc.EntityId });
+                    
+                    // Add to mapping
+                    _networkIdToEntity[desc.EntityId] = entity;
+                    
+                    Console.WriteLine($"[EntityMasterTranslator] Created entity {entity.Index} from EntityMaster (network ID {desc.EntityId})");
+                }
+                else
+                {
+                    Console.WriteLine($"[EntityMasterTranslator] Found existing entity {entity.Index} for network ID {desc.EntityId}");
+                }
+                
+                // Set or update NetworkOwnership
+                var netOwnership = new NetworkOwnership
+                {
+                    PrimaryOwnerId = desc.OwnerId,
+                    LocalNodeId = _localNodeId
+                };
+
+                if (repo.HasComponent<NetworkOwnership>(entity))
+                {
+                    repo.SetComponent(entity, netOwnership);
+                }
+                else
+                {
+                    repo.AddComponent(entity, netOwnership);
+                }
+                
+                // Ensure DescriptorOwnership exists
+                if (!repo.HasManagedComponent<DescriptorOwnership>(entity))
+                {
+                    repo.SetManagedComponent(entity, new DescriptorOwnership());
+                }
+                
+                // ★ KEY PART: Add NetworkSpawnRequest for NetworkSpawnerSystem to process
+                // This component tells the spawner:
+                // - What DIS type this entity is (for TKB template lookup)
+                // - Whether to use reliable init mode
+                // - What the primary owner is
+                if (!repo.HasComponent<NetworkSpawnRequest>(entity))
+                {
+                    repo.AddComponent(entity, new NetworkSpawnRequest
                     {
-                        // Create entity
-                        // But usually EntityState creates it with Position/Velocity.
-                        // Master just has Meta.
-                        // We'll skip creation logic for now unless required, assuming EntityState handles it.
-                        // Or if Master comes first?
-                    }
-                    else
-                    {
-                        // Update PrimaryOwnerId
-                        if (view.HasComponent<NetworkOwnership>(entity))
-                        {
-                            var ownership = view.GetComponentRO<NetworkOwnership>(entity);
-                            if (ownership.PrimaryOwnerId != desc.OwnerId)
-                            {
-                                var newOwnership = ownership;
-                                newOwnership.PrimaryOwnerId = desc.OwnerId;
-                                cmd.SetComponent(entity, newOwnership);
-                            }
-                        }
-                    }
+                        DisType = desc.Type,
+                        PrimaryOwnerId = desc.OwnerId,
+                        Flags = desc.Flags,
+                        NetworkEntityId = desc.EntityId
+                    });
+                    Console.WriteLine($"[EntityMasterTranslator] Added NetworkSpawnRequest for entity {entity.Index} (Type: {desc.Type.Kind}, Flags: {desc.Flags})");
                 }
             }
         }
@@ -76,15 +121,16 @@ namespace ModuleHost.Core.Network.Translators
                 entityId = desc.EntityId;
             }
             
-            if (entityId == 0) return;
+            if (entityId == 0)
+            {
+                Console.Error.WriteLine("[EntityMasterTranslator] Cannot handle disposal - no entity ID");
+                return;
+            }
             
             if (_networkIdToEntity.TryGetValue(entityId, out var entity))
             {
-                Console.WriteLine($"[EntityMaster] Disposed {entityId}. Destroying entity.");
+                Console.WriteLine($"[EntityMaster] Disposed {entityId}. Destroying entity {entity.Index}.");
                 cmd.DestroyEntity(entity);
-                // Note: _networkIdToEntity cleanup happens via hooks or next frame checks usually.
-                // We should remove it from local map to prevent further lookups this frame?
-                // Shared map management is tricky. Assume higher level system handles map consistency or OnDestroyed.
                 _networkIdToEntity.Remove(entityId);
             }
         }
