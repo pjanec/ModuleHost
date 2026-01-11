@@ -14,6 +14,8 @@ namespace ModuleHost.Core.Network
     /// </summary>
     public class NetworkGatewayModule : IModule
     {
+        public string Name => "NetworkGateway";
+        
         private readonly int _localNodeId;
         private readonly INetworkTopology _topology;
         private readonly EntityLifecycleModule _elm;
@@ -39,20 +41,17 @@ namespace ModuleHost.Core.Network
             _elm = elm ?? throw new ArgumentNullException(nameof(elm));
             _pendingPeerAcks = new Dictionary<Entity, HashSet<int>>();
             _pendingStartFrame = new Dictionary<Entity, uint>();
-        }
-        
-        public void Initialize(IModuleContext context)
-        {
+            
             // Register with ELM so we receive ConstructionOrder events
             _elm.RegisterModule(ModuleId);
         }
         
-        public void Execute(ISimulationView view, float deltaTime)
+        public void Tick(ISimulationView view, float deltaTime)
         {
-            Execute(view, deltaTime, null);
+            Tick(view, deltaTime, null);
         }
 
-        public void Execute(ISimulationView view, float deltaTime, uint? frameOverride)
+        public void Tick(ISimulationView view, float deltaTime, uint? frameOverride)
         {
             uint currentFrame = 0;
             
@@ -63,10 +62,6 @@ namespace ModuleHost.Core.Network
             else if (view is EntityRepository repo)
             {
                 currentFrame = repo.GlobalVersion;
-            }
-            else
-            {
-                return; // Cannot determine frame
             }
             
             var cmd = view.GetCommandBuffer();
@@ -90,35 +85,31 @@ namespace ModuleHost.Core.Network
                 // Only handle entities with PendingNetworkAck component
                 if (!view.HasComponent<PendingNetworkAck>(evt.Entity))
                 {
+                    Console.WriteLine($"[Gateway] Entity {evt.Entity.Index} missing PendingNetworkAck. ACKing.");
                     // Fast mode - ACK immediately
                     _elm.AcknowledgeConstruction(evt.Entity, ModuleId, currentFrame, cmd);
                     continue;
                 }
                 
                 // Reliable mode - determine peers and wait for their ACKs
-                if (!view.HasComponent<NetworkSpawnRequest>(evt.Entity))
-                {
-                    // Already processed or missing spawn request
-                    // This can happen if NetworkSpawnerSystem already removed it
-                    // We need the DIS type to know which peers to expect
-                    // Solution: Store DIS type in a separate component or lookup from DescriptorOwnership
-                    // For now, ACK immediately if we can't determine peers
-                    _elm.AcknowledgeConstruction(evt.Entity, ModuleId, currentFrame, cmd);
-                    continue;
-                }
+                // NetworkSpawnerSystem populates PendingNetworkAck with ExpectedType
+                var pendingInfo = view.GetComponentRO<PendingNetworkAck>(evt.Entity);
                 
-                var request = view.GetComponentRO<NetworkSpawnRequest>(evt.Entity);
-                var expectedPeers = _topology.GetExpectedPeers(request.DisType);
+                var expectedPeers = _topology.GetExpectedPeers(pendingInfo.ExpectedType);
                 var peerSet = new HashSet<int>(expectedPeers);
                 
+                Console.WriteLine($"[Gateway] Entity {evt.Entity.Index}: Reliable mode. Peers: {string.Join(",", peerSet)}");
+
                 if (peerSet.Count == 0)
                 {
+                    Console.WriteLine($"[Gateway] Entity {evt.Entity.Index}: No peers. ACKing.");
                     // No peers to wait for - ACK immediately
                     _elm.AcknowledgeConstruction(evt.Entity, ModuleId, currentFrame, cmd);
                     cmd.RemoveComponent<PendingNetworkAck>(evt.Entity);
                 }
                 else
                 {
+                    Console.WriteLine($"[Gateway] Entity {evt.Entity.Index}: Waiting for ACKs.");
                     // Wait for peer ACKs
                     _pendingPeerAcks[evt.Entity] = peerSet;
                     _pendingStartFrame[evt.Entity] = currentFrame;
@@ -191,11 +182,6 @@ namespace ModuleHost.Core.Network
                     _pendingStartFrame.Remove(evt.Entity);
                 }
             }
-        }
-        
-        public void Cleanup(IModuleContext context)
-        {
-            _elm.UnregisterModule(ModuleId);
         }
     }
 }

@@ -73,7 +73,10 @@ namespace ModuleHost.Core.Network.Translators
                 descOwnership = new DescriptorOwnership();
             }
             
-            descOwnership.Map[update.DescrTypeId] = update.NewOwner;
+            // descOwnership.Map[update.DescrTypeId] = update.NewOwner; // BUG?
+            // Fix: Use PackKey
+            long key = OwnershipExtensions.PackKey(update.DescrTypeId, update.InstanceId);
+            descOwnership.Map[key] = update.NewOwner;
             cmd.SetManagedComponent(entity, descOwnership);
             
             // Update primary owner if EntityMaster

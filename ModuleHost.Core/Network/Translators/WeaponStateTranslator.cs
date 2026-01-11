@@ -52,8 +52,6 @@ namespace ModuleHost.Core.Network.Translators
                     weaponStates = new WeaponStates();
                     batchCache[entity] = weaponStates;
                     // Note: We only Add to CMD once per entity at the end, or safely add here knowing we operate on ref
-                    // If we add now, subsequent updates to object will be reflected if the system supports reference handling.
-                    // Assuming Fdp.Kernel supports it.
                     cmd.AddManagedComponent(entity, weaponStates);
                 }
                 
@@ -89,11 +87,17 @@ namespace ModuleHost.Core.Network.Translators
                 {
                     long instanceId = kvp.Key;
                     
-                    // Check if we own this weapon instance
-                    if (!view.OwnsDescriptor(entity, NetworkConstants.WEAPON_STATE_DESCRIPTOR_ID, instanceId))
-                        continue;
-                    
-                    var weaponState = kvp.Value;
+            // If not found (new instance)
+            if (instanceId == -1) // Use a flag if found
+            {
+                // Just use the provided instanceId
+            }
+            
+            // Check if we own this weapon instance
+            if (!view.OwnsDescriptor(entity, NetworkConstants.WEAPON_STATE_DESCRIPTOR_ID, instanceId))
+                continue;
+            
+            var weaponState = kvp.Value;
                     
                     var desc = new WeaponStateDescriptor
                     {

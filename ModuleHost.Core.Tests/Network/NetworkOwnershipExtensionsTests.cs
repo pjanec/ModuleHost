@@ -52,7 +52,7 @@ namespace ModuleHost.Core.Tests.Network
             {
                 Map = new Dictionary<long, int>
                 {
-                    { 2, 2 }  // Descriptor 2 owned by Node 2
+                    { OwnershipExtensions.PackKey(2, 0), 2 }  // Descriptor 2 owned by Node 2
                 }
             });
             
@@ -91,7 +91,7 @@ namespace ModuleHost.Core.Tests.Network
             {
                 Map = new Dictionary<long, int>
                 {
-                    { 2, 3 }  // Descriptor 2 owned by Node 3
+                    { OwnershipExtensions.PackKey(2, 0), 3 }  // Descriptor 2 owned by Node 3
                 }
             });
             

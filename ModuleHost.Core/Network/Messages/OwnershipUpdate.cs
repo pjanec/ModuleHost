@@ -23,11 +23,16 @@ namespace ModuleHost.Core.Network.Messages
         /// Descriptor instance ID (for multi-instance descriptors).
         /// Zero if descriptor type has single instance per entity.
         /// </summary>
-        public long DescrInstanceId;
+        public long InstanceId;
         
         /// <summary>
         /// New owner node ID.
         /// </summary>
         public int NewOwner;
+        
+        /// <summary>
+        /// Timestamp of the update (ms since epoch).
+        /// </summary>
+        public long Timestamp;
     }
 }

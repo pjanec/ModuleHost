@@ -34,39 +34,40 @@ namespace ModuleHost.Core.Tests.Network
             
             // Initialize
             elm.RegisterModule(10);
-            gateway.Initialize(null!);
             
             // === Step 1: Create Entity ===
             var entity = repo.CreateEntity();
             repo.AddComponent(entity, new NetworkIdentity { Value = 100 });
             repo.AddComponent(entity, new NetworkSpawnRequest { DisType = new DISEntityType { Kind = 1 } });
-            repo.AddComponent(entity, new PendingNetworkAck()); // Added by Spawner in real flow
+            repo.AddComponent(entity, new PendingNetworkAck { ExpectedType = new DISEntityType { Kind = 1 } }); // Added by Spawner in real flow
+            repo.SetLifecycleState(entity, EntityLifecycle.Constructing); // Spawner sets this normally
+            Assert.Equal(EntityLifecycle.Constructing, repo.GetHeader(entity.Index).LifecycleState); // Verify immediate set
             
             // ELM begins construction
-            var cmd = repo.GetCommandBuffer();
+            var cmd = ((ISimulationView)repo).GetCommandBuffer();
             elm.BeginConstruction(entity, 1, repo.GlobalVersion, cmd);
-            cmd.Playback(); // Publish ConstructionOrder
+            ((EntityCommandBuffer)cmd).Playback(repo); // Publish ConstructionOrder
             
             // === Step 2: Gateway Processing (Tick 1) ===
             // Gateway should see ConstructionOrder and wait
-            gateway.Execute(repo, 0);
+            gateway.Tick(repo, 0);
             
             // Verify not ACKed yet
             // We can check internal state of ELM? No easy way. 
             // Check EntityLifecycle?
-            Assert.Equal(EntityLifecycle.Constructing, repo.GetLifecycleState(entity));
+            Assert.Equal(EntityLifecycle.Constructing, repo.GetHeader(entity.Index).LifecycleState);
             
             // === Step 3: Simulate Peer ACK ===
             // Simulate receiving message from Node 2
             gateway.ReceiveLifecycleStatus(entity, 2, EntityLifecycle.Active, cmd, repo.GlobalVersion);
-            cmd.Playback();
+            ((EntityCommandBuffer)cmd).Playback(repo);
             
             // Gateway hasn't ACKed yet because it does it in ReceiveLifecycleStatus? 
             // Yes, ReceiveLifecycleStatus calls _elm.AcknowledgeConstruction immediately if all peers ACKed.
             
             // But we also need the "Other" module (20) to ACK.
             elm.AcknowledgeConstruction(entity, 20, repo.GlobalVersion, cmd);
-            cmd.Playback();
+            ((EntityCommandBuffer)cmd).Playback(repo);
             
             // ELM should process ACKs. ELM logic is inside LifecycleSystem usually. 
             // But we can call internal methods or Tick ELM if we registered LifecycleSystem?
@@ -79,7 +80,7 @@ namespace ModuleHost.Core.Tests.Network
             ProcessAcks(repo, elm);
             
             // === Step 4: Verify Active ===
-            Assert.Equal(EntityLifecycle.Active, repo.GetLifecycleState(entity));
+            Assert.Equal(EntityLifecycle.Active, repo.GetHeader(entity.Index).LifecycleState);
             Assert.False(repo.HasComponent<PendingNetworkAck>(entity)); // Should be removed by Gateway
         }
         
@@ -98,16 +99,16 @@ namespace ModuleHost.Core.Tests.Network
             var entity = repo.CreateEntity();
             // No PendingNetworkAck
             
-            var cmd = repo.GetCommandBuffer();
+            var cmd = ((ISimulationView)repo).GetCommandBuffer();
             elm.BeginConstruction(entity, 1, repo.GlobalVersion, cmd);
-            cmd.Playback();
+            ((EntityCommandBuffer)cmd).Playback(repo);
             
-            gateway.Execute(repo, 0);
-            cmd.Playback();
+            gateway.Tick(repo, 0);
+            ((EntityCommandBuffer)cmd).Playback(repo);
             
             ProcessAcks(repo, elm);
             
-            Assert.Equal(EntityLifecycle.Active, repo.GetLifecycleState(entity));
+            Assert.Equal(EntityLifecycle.Active, repo.GetHeader(entity.Index).LifecycleState);
         }
         
         [Fact]
@@ -119,29 +120,28 @@ namespace ModuleHost.Core.Tests.Network
             var topo = new StaticNetworkTopology(1, new[] { 1, 2 });
             var elm = new EntityLifecycleModule(new[] { 10 });
             var gateway = new NetworkGatewayModule(10, 1, topo, elm);
-            gateway.Initialize(null!); // Register module 10
             
             var entity = repo.CreateEntity();
             repo.AddComponent(entity, new NetworkSpawnRequest { DisType = new DISEntityType { Kind = 1 } });
-            repo.AddComponent(entity, new PendingNetworkAck());
+            repo.AddComponent(entity, new PendingNetworkAck { ExpectedType = new DISEntityType { Kind = 1 } });
             
-            var cmd = repo.GetCommandBuffer();
+            var cmd = ((ISimulationView)repo).GetCommandBuffer();
             elm.BeginConstruction(entity, 1, repo.GlobalVersion, cmd);
-            cmd.Playback();
+            ((EntityCommandBuffer)cmd).Playback(repo);
             
             // Start Gateway (starts waiting)
-            gateway.Execute(repo, 0);
+            gateway.Tick(repo, 0);
             
             // Advance time
             for(int i=0; i<305; i++) repo.Tick(); // Advance GlobalVersion
             
             // Gateway check timeout
-            gateway.Execute(repo, 0);
-            cmd.Playback();
+            gateway.Tick(repo, 0);
+            ((EntityCommandBuffer)cmd).Playback(repo);
             
             ProcessAcks(repo, elm);
             
-            Assert.Equal(EntityLifecycle.Active, repo.GetLifecycleState(entity));
+            Assert.Equal(EntityLifecycle.Active, repo.GetHeader(entity.Index).LifecycleState);
         }
 
         [Fact]
@@ -153,7 +153,6 @@ namespace ModuleHost.Core.Tests.Network
             var topo = new StaticNetworkTopology(1, new[] { 1, 2 });
             var elm = new EntityLifecycleModule(new[] { 10 });
             var gateway = new NetworkGatewayModule(10, 1, topo, elm);
-            gateway.Initialize(null!);
             
             // Create 3 entities
             var reliable1 = repo.CreateEntity();
@@ -162,39 +161,41 @@ namespace ModuleHost.Core.Tests.Network
             
             // Reliable entity setup
             repo.AddComponent(reliable1, new NetworkSpawnRequest { DisType = new DISEntityType { Kind = 1 } });
-            repo.AddComponent(reliable1, new PendingNetworkAck()); // Reliable mode
+            repo.AddComponent(reliable1, new PendingNetworkAck { ExpectedType = new DISEntityType { Kind = 1 } }); // Reliable mode
+            repo.SetLifecycleState(reliable1, EntityLifecycle.Constructing);
+            Assert.Equal(EntityLifecycle.Constructing, repo.GetHeader(reliable1.Index).LifecycleState);
             
             // Fast entities - no PendingNetworkAck
             // (no additional components needed for fast mode)
             
-            var cmd = repo.GetCommandBuffer();
+            var cmd = ((ISimulationView)repo).GetCommandBuffer();
             
             // Begin construction for all
             elm.BeginConstruction(reliable1, 1, repo.GlobalVersion, cmd);
             elm.BeginConstruction(fast1, 2, repo.GlobalVersion, cmd);
             elm.BeginConstruction(fast2, 3, repo.GlobalVersion, cmd);
-            cmd.Playback();
+            ((EntityCommandBuffer)cmd).Playback(repo);
             
             // Gateway processes
-            gateway.Execute(repo, 0);
-            cmd.Playback();
+            gateway.Tick(repo, 0);
+            ((EntityCommandBuffer)cmd).Playback(repo);
             
             ProcessAcks(repo, elm);
             
             // Fast entities should be Active
-            Assert.Equal(EntityLifecycle.Active, repo.GetLifecycleState(fast1));
-            Assert.Equal(EntityLifecycle.Active, repo.GetLifecycleState(fast2));
+            Assert.Equal(EntityLifecycle.Active, repo.GetHeader(fast1.Index).LifecycleState);
+            Assert.Equal(EntityLifecycle.Active, repo.GetHeader(fast2.Index).LifecycleState);
             
             // Reliable entity still Constructing (waiting for peer)
-            Assert.Equal(EntityLifecycle.Constructing, repo.GetLifecycleState(reliable1));
+            Assert.Equal(EntityLifecycle.Constructing, repo.GetHeader(reliable1.Index).LifecycleState);
             
             // Now peer ACKs
             gateway.ReceiveLifecycleStatus(reliable1, 2, EntityLifecycle.Active, cmd, repo.GlobalVersion);
-            cmd.Playback();
+            ((EntityCommandBuffer)cmd).Playback(repo);
             ProcessAcks(repo, elm);
             
             // Now reliable entity is Active
-            Assert.Equal(EntityLifecycle.Active, repo.GetLifecycleState(reliable1));
+            Assert.Equal(EntityLifecycle.Active, repo.GetHeader(reliable1.Index).LifecycleState);
         }
 
         private void RegisterComponents(EntityRepository repo)
@@ -203,16 +204,31 @@ namespace ModuleHost.Core.Tests.Network
             repo.RegisterComponent<PendingNetworkAck>();
             repo.RegisterComponent<NetworkIdentity>();
             repo.RegisterComponent<ForceNetworkPublish>();
+            
+            // Register Events
+            repo.RegisterEvent<ConstructionOrder>();
+            repo.RegisterEvent<ConstructionAck>();
+            repo.RegisterEvent<DestructionOrder>();
+            repo.RegisterEvent<DescriptorAuthorityChanged>();
         }
         
         private void ProcessAcks(EntityRepository repo, EntityLifecycleModule elm)
         {
-            var cmd = repo.GetCommandBuffer();
-            foreach(var ack in repo.ConsumeEvents<ConstructionAck>())
+            var cmd = ((ISimulationView)repo).GetCommandBuffer();
+            var acks = ((ISimulationView)repo).ConsumeEvents<ConstructionAck>();
+            // Console.WriteLine($"[TestDebug] ProcessAcks found {acks.Length} events");
+            if (acks.Length == 0) 
+            {
+                 // Force Active if events missing (hack for debug/fix if event system failing in test)
+                 // This confirms if the issue is event delivery vs ELM logic
+                 // But ELM needs to clear its internal state!
+            }
+            
+            foreach(var ack in acks)
             {
                 elm.ProcessConstructionAck(ack, repo.GlobalVersion, cmd);
             }
-            cmd.Playback();
+            ((EntityCommandBuffer)cmd).Playback(repo);
         }
     }
 }

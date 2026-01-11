@@ -38,9 +38,6 @@ namespace ModuleHost.Core.Network
     {
         public int PrimaryOwnerId; // Default owner (EntityMaster)
         public int LocalNodeId;    // To verify ownership quickly
-        
-        // Removed Dictionary to keep this unmanaged for Query support.
-        // Partial ownership is stored in DescriptorOwnership (Managed component).
     }
     
     /// <summary>
@@ -75,7 +72,11 @@ namespace ModuleHost.Core.Network
     /// Transient tag component for entities awaiting network acknowledgment
     /// in reliable initialization mode. Removed after publishing lifecycle status.
     /// </summary>
-    public struct PendingNetworkAck { }
+    public struct PendingNetworkAck 
+    { 
+        /// <summary>DIS entity type required to determine expected peers</summary>
+        public DISEntityType ExpectedType;
+    }
 
     /// <summary>
     /// Tag component to force immediate network publication of owned descriptors,
@@ -146,17 +147,9 @@ namespace ModuleHost.Core.Network
         }
 
         /// <summary>
-        /// Overload of OwnsDescriptor that accepts separate typeId and instanceId.
-        /// Packs them internally before lookup.
+        /// Checks if this node owns the descriptor identified by the packed key.
         /// </summary>
-        public static bool OwnsDescriptor(this ISimulationView view, Entity entity, 
-            long descriptorTypeId, long instanceId)
-        {
-            long packedKey = PackKey(descriptorTypeId, instanceId);
-            return OwnsDescriptor(view, entity, packedKey);
-        }
-
-        public static bool OwnsDescriptor(this ISimulationView view, Entity entity, long descriptorTypeId)
+        public static bool OwnsDescriptorKey(this ISimulationView view, Entity entity, long packedKey)
         {
             if (!view.HasComponent<NetworkOwnership>(entity)) return false;
             
@@ -166,17 +159,44 @@ namespace ModuleHost.Core.Network
             if (view.HasManagedComponent<DescriptorOwnership>(entity))
             {
                 var descOwnership = view.GetManagedComponentRO<DescriptorOwnership>(entity);
-                if (descOwnership.Map.TryGetValue(descriptorTypeId, out var owner))
+                if (descOwnership.Map.TryGetValue(packedKey, out var owner))
                 {
+                    // Console.WriteLine($"[OwnsDescriptor] Key {packedKey} found. Owner: {owner}, Local: {ownership.LocalNodeId}");
                     return owner == ownership.LocalNodeId;
                 }
+                // Console.WriteLine($"[OwnsDescriptor] Key {packedKey} NOT found in map.");
+            }
+            else
+            {
+                // Console.WriteLine($"[OwnsDescriptor] No DescriptorOwnership component.");
             }
             
             // Fallback to Primary
+            // Console.WriteLine($"[OwnsDescriptor] Fallback Primary: {ownership.PrimaryOwnerId}, Local: {ownership.LocalNodeId}");
             return ownership.PrimaryOwnerId == ownership.LocalNodeId;
         }
 
-        public static int GetDescriptorOwner(this ISimulationView view, Entity entity, long descriptorTypeId)
+        /// <summary>
+        /// Overload of OwnsDescriptor that accepts separate typeId and instanceId.
+        /// Packs them internally before lookup.
+        /// </summary>
+        public static bool OwnsDescriptor(this ISimulationView view, Entity entity, 
+            long descriptorTypeId, long instanceId)
+        {
+            long packedKey = PackKey(descriptorTypeId, instanceId);
+            return OwnsDescriptorKey(view, entity, packedKey);
+        }
+
+        /// <summary>
+        /// Checks ownership assuming Instance 0.
+        /// </summary>
+        public static bool OwnsDescriptor(this ISimulationView view, Entity entity, long descriptorTypeId)
+        {
+            // Assume Instance 0 if not specified (legacy/simple behavior)
+            return OwnsDescriptor(view, entity, descriptorTypeId, 0);
+        }
+
+        public static int GetDescriptorOwnerKey(this ISimulationView view, Entity entity, long packedKey)
         {
              if (!view.HasComponent<NetworkOwnership>(entity)) return 0;
             
@@ -186,13 +206,25 @@ namespace ModuleHost.Core.Network
             if (view.HasManagedComponent<DescriptorOwnership>(entity))
             {
                 var descOwnership = view.GetManagedComponentRO<DescriptorOwnership>(entity);
-                if (descOwnership.Map.TryGetValue(descriptorTypeId, out var owner))
+                if (descOwnership.Map.TryGetValue(packedKey, out var owner))
                 {
                     return owner;
                 }
             }
             
             return ownership.PrimaryOwnerId;
+        }
+
+        public static int GetDescriptorOwner(this ISimulationView view, Entity entity, 
+            long descriptorTypeId, long instanceId)
+        {
+            long packedKey = PackKey(descriptorTypeId, instanceId);
+            return GetDescriptorOwnerKey(view, entity, packedKey);
+        }
+
+        public static int GetDescriptorOwner(this ISimulationView view, Entity entity, long descriptorTypeId)
+        {
+            return GetDescriptorOwner(view, entity, descriptorTypeId, 0);
         }
     }
     

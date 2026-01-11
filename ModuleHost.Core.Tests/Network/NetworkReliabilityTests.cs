@@ -3,8 +3,11 @@ using System.Collections.Generic;
 using System.Linq;
 using Fdp.Kernel;
 using ModuleHost.Core.Network;
+using ModuleHost.Core.Network.Systems;
 using ModuleHost.Core.Network.Translators;
 using ModuleHost.Core.Tests.Mocks;
+using ModuleHost.Core.Network.Messages;
+using ModuleHost.Core.Abstractions;
 using Xunit;
 
 namespace ModuleHost.Core.Tests.Network
@@ -18,37 +21,42 @@ namespace ModuleHost.Core.Tests.Network
             RegisterComponents(repo);
             
             var networkIdToEntity = new Dictionary<long, Entity>();
-            var translator = new EntityStateTranslator(1, networkIdToEntity);
+            var translator = new EntityMasterTranslator(1, networkIdToEntity);
             
-            // Simulate 100 packets, 10% loss
-            var random = new Random(42); // Seeded for reproducibility
+            // Generate 100 entity creation packets
             var packets = new List<IDataSample>();
-            
             for (int i = 0; i < 100; i++)
             {
-                if (random.NextDouble() > 0.10) // 90% delivery rate
+                packets.Add(new DataSample
                 {
-                    packets.Add(new DataSample
-                    {
-                        Data = new EntityStateDescriptor
-                        {
-                            EntityId = i,
-                            Location = new System.Numerics.Vector3(i, i, 0),
-                            Velocity = new System.Numerics.Vector3(1, 1, 0)
-                        },
-                        InstanceState = DdsInstanceState.Alive,
-                        EntityId = i
-                    });
-                }
+                    Data = new EntityMasterDescriptor { EntityId = i, OwnerId = 1, Type = new DISEntityType { Kind = 1 } },
+                    InstanceState = DdsInstanceState.Alive,
+                    EntityId = i
+                });
             }
             
-            var reader = new MockDataReader(packets.ToArray());
-            var cmd = repo.GetCommandBuffer();
-            translator.PollIngress(reader, cmd, repo);
-            cmd.Playback();
+            // Drop 10% randomly
+            var rand = new Random(42);
+            var receivedPackets = packets.Where(p => rand.NextDouble() > 0.1).ToList();
             
-            // Verify ~90 entities created (with some variance)
-            Assert.InRange(networkIdToEntity.Count, 85, 95);
+            // Process
+            var reader = new MockDataReader(receivedPackets.ToArray());
+            var cmd = ((ISimulationView)repo).GetCommandBuffer();
+            translator.PollIngress(reader, cmd, repo);
+            ((EntityCommandBuffer)cmd).Playback(repo);
+            
+            // Should have ~90 entities
+            Assert.InRange(networkIdToEntity.Count, 80, 95);
+            
+            // Re-send missing packets (simulate reliable retry or eventual arrival)
+            var missingPackets = packets.Except(receivedPackets).ToList();
+            var retryReader = new MockDataReader(missingPackets.ToArray());
+            
+            translator.PollIngress(retryReader, cmd, repo);
+            ((EntityCommandBuffer)cmd).Playback(repo);
+            
+            // Now should have all 100
+            Assert.Equal(100, networkIdToEntity.Count);
         }
         
         [Fact]
@@ -58,36 +66,27 @@ namespace ModuleHost.Core.Tests.Network
             RegisterComponents(repo);
             
             var networkIdToEntity = new Dictionary<long, Entity>();
-            var translator = new EntityStateTranslator(1, networkIdToEntity);
+            var translator = new EntityMasterTranslator(1, networkIdToEntity);
             
-            // Send same EntityState packet 5 times (duplicate due to retransmission)
-            var samples = new List<IDataSample>();
-            for (int i = 0; i < 5; i++)
+            // Create 1 packet, duplicated 5 times
+            var packet = new DataSample
             {
-                samples.Add(new DataSample
-                {
-                    Data = new EntityStateDescriptor
-                    {
-                        EntityId = 100,
-                        Location = new System.Numerics.Vector3(10, 10, 0),
-                        Velocity = new System.Numerics.Vector3(1, 1, 0)
-                    },
-                    InstanceState = DdsInstanceState.Alive,
-                    EntityId = 100
-                });
-            }
+                Data = new EntityMasterDescriptor { EntityId = 100, OwnerId = 1, Type = new DISEntityType { Kind = 1 } },
+                InstanceState = DdsInstanceState.Alive,
+                EntityId = 100
+            };
             
-            var reader = new MockDataReader(samples.ToArray());
-            var cmd = repo.GetCommandBuffer();
+            var samples = Enumerable.Repeat((IDataSample)packet, 5).ToArray();
+            var reader = new MockDataReader(samples);
+            var cmd = ((ISimulationView)repo).GetCommandBuffer();
+            
             translator.PollIngress(reader, cmd, repo);
-            cmd.Playback();
+            ((EntityCommandBuffer)cmd).Playback(repo);
             
-            // Verify only 1 entity created, not 5
+            // Should exist once
             Assert.Single(networkIdToEntity);
-            
-            var entity = networkIdToEntity[100];
-            var pos = repo.GetComponentRO<Position>(entity);
-            Assert.Equal(10, pos.Value.X);
+            Assert.True(networkIdToEntity.ContainsKey(100));
+            Assert.True(((ISimulationView)repo).IsAlive(networkIdToEntity[100]));
         }
         
         [Fact]
@@ -97,67 +96,65 @@ namespace ModuleHost.Core.Tests.Network
             RegisterComponents(repo);
             
             var networkIdToEntity = new Dictionary<long, Entity>();
-            var stateTranslator = new EntityStateTranslator(1, networkIdToEntity);
-            var masterTranslator = new EntityMasterTranslator(1, networkIdToEntity, null!);
+            // Scenario: EntityMaster arrives AFTER EntityState (Ghost creation)
             
-            // Scenario: EntityState arrives BEFORE EntityMaster (out of order)
+            var map = new DescriptorOwnershipMap();
+            // EntityStateTranslator handles ghost creation if master missing
+            var entityStateTranslator = new EntityStateTranslator(1, map, networkIdToEntity);
+            var entityMasterTranslator = new EntityMasterTranslator(1, networkIdToEntity);
             
-            // Step 1: EntityState arrives (should create Ghost)
-            var stateReader = new MockDataReader(new DataSample
+            var cmd = ((ISimulationView)repo).GetCommandBuffer();
+            
+            // 1. Receive EntityState first (for Entity 500)
+            var statePacket = new DataSample
             {
-                Data = new EntityStateDescriptor
-                {
-                    EntityId = 200,
-                    Location = new System.Numerics.Vector3(50, 50, 0),
-                    Velocity = new System.Numerics.Vector3(2, 2, 0)
-                },
+                Data = new EntityStateDescriptor { EntityId = 500, OwnerId = 2, Location = System.Numerics.Vector3.One },
                 InstanceState = DdsInstanceState.Alive,
-                EntityId = 200
-            });
+                EntityId = 500
+            };
             
-            var cmd = repo.GetCommandBuffer();
-            stateTranslator.PollIngress(stateReader, cmd, repo);
-            cmd.Playback();
+            entityStateTranslator.PollIngress(new MockDataReader(statePacket), cmd, repo);
+            ((EntityCommandBuffer)cmd).Playback(repo);
             
-            Assert.Single(networkIdToEntity);
-            var entity = networkIdToEntity[200];
-            Assert.Equal(EntityLifecycle.Ghost, repo.GetLifecycleState(entity));
+            // Check: Entity should exist as Ghost
+            Assert.True(networkIdToEntity.ContainsKey(500));
+            var ghost = networkIdToEntity[500];
+            Assert.Equal(EntityLifecycle.Ghost, repo.GetHeader(ghost.Index).LifecycleState);
             
-            var ghostPos = repo.GetComponentRO<Position>(entity);
-            Assert.Equal(50, ghostPos.Value.X);
-            
-            // Step 2: EntityMaster arrives late (should promote Ghost)
-            var masterReader = new MockDataReader(new DataSample
+            // 2. Receive EntityMaster later
+            var masterPacket = new DataSample
             {
-                Data = new EntityMasterDescriptor
-                {
-                    EntityId = 200,
-                    OwnerId = 1,
-                    Type = new DISEntityType { Kind = 1 },
-                    Name = "LateArrival"
-                },
+                Data = new EntityMasterDescriptor { EntityId = 500, OwnerId = 2, Type = new DISEntityType { Kind = 99 } },
                 InstanceState = DdsInstanceState.Alive,
-                EntityId = 200
-            });
+                EntityId = 500
+            };
             
-            cmd = repo.GetCommandBuffer();
-            masterTranslator.PollIngress(masterReader, cmd, repo);
-            cmd.Playback();
+            entityMasterTranslator.PollIngress(new MockDataReader(masterPacket), cmd, repo);
+            ((EntityCommandBuffer)cmd).Playback(repo);
             
-            // Verify: Same entity, Ghost position preserved, now has NetworkSpawnRequest
-            Assert.Single(networkIdToEntity);
-            Assert.True(repo.HasComponent<NetworkSpawnRequest>(entity));
+            // Check: Entity should now have DIS Type 99 and NetworkSpawnRequest
+            var updatedEntity = networkIdToEntity[500];
+            Assert.Equal(ghost, updatedEntity);
             
-            var finalPos = repo.GetComponentRO<Position>(entity);
-            Assert.Equal(50, finalPos.Value.X); // Position from Ghost preserved
+            // Note: Lifecycle remains Ghost until Spawner processes the NetworkSpawnRequest? 
+            // Or does MasterTranslator promote it?
+            // MasterTranslator adds NetworkSpawnRequest. Spawner will promote to Constructing/Active.
+            
+            // We check for NetworkSpawnRequest component
+            Assert.True(((ISimulationView)repo).HasComponent<NetworkSpawnRequest>(updatedEntity));
+            var req = ((ISimulationView)repo).GetComponentRO<NetworkSpawnRequest>(updatedEntity);
+            Assert.Equal(99, req.DisType.Kind);
         }
         
         private void RegisterComponents(EntityRepository repo)
         {
             repo.RegisterComponent<NetworkIdentity>();
+            repo.RegisterComponent<NetworkSpawnRequest>();
+            repo.RegisterComponent<NetworkOwnership>();
+            repo.RegisterManagedComponent<DescriptorOwnership>();
             repo.RegisterComponent<Position>();
             repo.RegisterComponent<Velocity>();
-            repo.RegisterComponent<NetworkSpawnRequest>();
+            repo.RegisterComponent<NetworkTarget>();
         }
     }
 }

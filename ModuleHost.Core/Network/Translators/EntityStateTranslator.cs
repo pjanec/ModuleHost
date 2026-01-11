@@ -203,7 +203,8 @@ namespace ModuleHost.Core.Network.Translators
                 var ro = view.GetManagedComponentRO<DescriptorOwnership>(entity);
                 var copy = new DescriptorOwnership { Map = new Dictionary<long, int>(ro.Map) };
                 
-                if (copy.Map.Remove(ENTITY_STATE_DESCRIPTOR_ID))
+                long key = OwnershipExtensions.PackKey(ENTITY_STATE_DESCRIPTOR_ID, 0);
+                if (copy.Map.Remove(key))
                 {
                     cmd.SetManagedComponent(entity, copy);
                 }

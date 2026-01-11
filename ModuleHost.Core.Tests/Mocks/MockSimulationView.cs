@@ -1,13 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Fdp.Kernel;
 using ModuleHost.Core.Abstractions;
 using ModuleHost.Core.ELM;
 
 namespace ModuleHost.Core.Tests.Mocks
 {
-    public class MockSimulationView : ISimulationView
+    public class TestMockView : ISimulationView
     {
         // Storage for unmanaged components (supporting ref return)
         public Dictionary<Entity, Dictionary<Type, Array>> ComponentArrays = new();
@@ -16,10 +17,14 @@ namespace ModuleHost.Core.Tests.Mocks
         public Dictionary<Entity, Dictionary<Type, object>> ManagedComponents = new();
 
         public List<ConstructionOrder> ConstructionOrders = new();
-        public List<DestructionOrder> DestructionOrders = new(); // Added for BATCH-14.1
+        public List<DestructionOrder> DestructionOrders = new();
         public MockCommandBuffer CommandBuffer;
         
-        public MockSimulationView(MockCommandBuffer cmd)
+        // ISimulationView properties
+        public uint Tick => 0;
+        public float Time => 0f;
+        
+        public TestMockView(MockCommandBuffer cmd)
         {
             CommandBuffer = cmd;
         }
@@ -38,7 +43,7 @@ namespace ModuleHost.Core.Tests.Mocks
 
         public IEntityCommandBuffer GetCommandBuffer() => CommandBuffer;
 
-        public IEnumerable<T> ConsumeEvents<T>() where T : unmanaged
+        public ReadOnlySpan<T> ConsumeEvents<T>() where T : unmanaged
         {
             if (typeof(T) == typeof(ConstructionOrder))
             {
@@ -48,7 +53,7 @@ namespace ModuleHost.Core.Tests.Mocks
                     result.Add((T)(object)order);
                 }
                 ConstructionOrders.Clear();
-                return result;
+                return CollectionsMarshal.AsSpan(result);
             }
             if (typeof(T) == typeof(DestructionOrder))
             {
@@ -58,9 +63,9 @@ namespace ModuleHost.Core.Tests.Mocks
                     result.Add((T)(object)order);
                 }
                 DestructionOrders.Clear();
-                return result;
+                return CollectionsMarshal.AsSpan(result);
             }
-            return Enumerable.Empty<T>();
+            return ReadOnlySpan<T>.Empty;
         }
 
         public bool HasComponent<T>(Entity entity) where T : unmanaged
@@ -84,11 +89,14 @@ namespace ModuleHost.Core.Tests.Mocks
             return ManagedComponents.ContainsKey(entity) && ManagedComponents[entity].ContainsKey(typeof(T));
         }
 
-        public IEntityQueryBuilder Query() => new MockQueryBuilder(this);
-        public void RegisterSystem(ISystem system) { }
-        public void UnregisterSystem(ISystem system) { }
-        public void RegisterModule(IModule module) { }
-        public void UnregisterModule(IModule module) { }
+        public QueryBuilder Query() 
+        {
+            return null!; 
+        }
+
+        public bool IsAlive(Entity entity) => ComponentArrays.ContainsKey(entity) || ManagedComponents.ContainsKey(entity);
+        
+        public IReadOnlyList<T> ConsumeManagedEvents<T>() where T : class => Array.Empty<T>();
     }
     
     public class MockCommandBuffer : IEntityCommandBuffer
@@ -98,7 +106,7 @@ namespace ModuleHost.Core.Tests.Mocks
         public List<object> PublishedEvents = new();
         public List<(Entity, object)> AddedManagedComponents = new();
 
-        public void PublishEvent<T>(T ev) where T : unmanaged
+        public void PublishEvent<T>(in T ev) where T : unmanaged
         {
             if (ev is ConstructionAck ack) Acks.Add(ack);
             PublishedEvents.Add(ev);
@@ -111,42 +119,23 @@ namespace ModuleHost.Core.Tests.Mocks
 
         public void DestroyEntity(Entity entity) { }
         public void SetLifecycleState(Entity entity, EntityLifecycle state) { }
-        public void AddComponent<T>(Entity entity, T component) where T : unmanaged { }
+        public void AddComponent<T>(Entity entity, in T component) where T : unmanaged { }
         
-        public void AddManagedComponent<T>(Entity entity, T component) where T : class 
+        public void AddManagedComponent<T>(Entity entity, T? component) where T : class 
         {
-            AddedManagedComponents.Add((entity, component));
+            if (component != null)
+                AddedManagedComponents.Add((entity, component));
         }
         
         public void RemoveManagedComponent<T>(Entity entity) where T : class { }
-    }
-    
-    public class MockQueryBuilder : IEntityQueryBuilder
-    {
-        private MockSimulationView _view;
-        private List<Type> _withComponents = new();
-        private List<EntityLifecycle> _lifecycles = new();
-        private EntityLifecycle? _targetLifecycle;
-
-        public MockQueryBuilder(MockSimulationView view) { _view = view; }
-
-        public IEntityQueryBuilder With<T>() { _withComponents.Add(typeof(T)); return this; }
-        public IEntityQueryBuilder WithLifecycle(EntityLifecycle state) { _targetLifecycle = state; return this; }
-        public IEntityQueryBuilder Without<T>() => this;
-
-        public IEnumerable<Entity> Build()
+        
+        // Missing members implemented as stubs
+        public Entity CreateEntity() => new Entity();
+        public void SetComponent<T>(Entity entity, in T component) where T : unmanaged { }
+        public void SetManagedComponent<T>(Entity entity, T? component) where T : class 
         {
-            var candidates = _view.ComponentArrays.Keys.Union(_view.ManagedComponents.Keys);
-            
-            return candidates.Where(e => {
-                foreach (var type in _withComponents)
-                {
-                    bool hasUnmanaged = _view.ComponentArrays.ContainsKey(e) && _view.ComponentArrays[e].ContainsKey(type);
-                    bool hasManaged = _view.ManagedComponents.ContainsKey(e) && _view.ManagedComponents[e].ContainsKey(type);
-                    if (!hasUnmanaged && !hasManaged) return false;
-                }
-                return true;
-            });
+             if (component != null)
+                AddedManagedComponents.Add((entity, component)); // Treat set as add for mock
         }
     }
 }

@@ -31,10 +31,7 @@ namespace ModuleHost.Core.Network.Translators
         
         public void PollIngress(IDataReader reader, IEntityCommandBuffer cmd, ISimulationView view)
         {
-            var repo = view as EntityRepository;
-            if (repo == null) return;
-            
-            uint currentFrame = repo.GlobalVersion;
+            uint currentFrame = view.Tick;
             
             foreach (var sample in reader.TakeSamples())
             {

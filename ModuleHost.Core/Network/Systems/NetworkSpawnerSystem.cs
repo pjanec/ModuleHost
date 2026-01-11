@@ -133,7 +133,7 @@ namespace ModuleHost.Core.Network.Systems
             if (request.Flags.HasFlag(MasterFlags.ReliableInit))
             {
                 // Add PendingNetworkAck tag - NetworkGateway will wait for peer ACKs
-                repo.AddComponent(entity, new PendingNetworkAck());
+                repo.AddComponent(entity, new PendingNetworkAck { ExpectedType = request.DisType });
                 Console.WriteLine($"[NetworkSpawnerSystem] Entity {entity.Index} marked for reliable init");
             }
         }

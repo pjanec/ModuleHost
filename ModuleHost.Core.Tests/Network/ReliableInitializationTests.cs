@@ -37,16 +37,13 @@ namespace ModuleHost.Core.Tests.Network
         }
         
         // Setup Helper
-        private (NetworkGatewayModule, EntityLifecycleModule, MockSimulationView, MockCommandBuffer) Setup(INetworkTopology topology)
+        private (NetworkGatewayModule, EntityLifecycleModule, TestMockView, MockCommandBuffer) Setup(INetworkTopology topology)
         {
             var participating = new[] { 10 };
             var elm = new EntityLifecycleModule(participating);
             var cmd = new MockCommandBuffer();
-            var view = new MockSimulationView(cmd);
+            var view = new TestMockView(cmd);
             var module = new NetworkGatewayModule(10, 1, topology, elm);
-            
-            // Initialize module
-            module.Initialize(null!);
             
             return (module, elm, view, cmd);
         }
@@ -85,10 +82,9 @@ namespace ModuleHost.Core.Tests.Network
             var (module, elm, view, cmd) = Setup(new MockTopology());
             var entity = new Entity(1, 1);
             
-            // No PendingNetworkAck added
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity });
             
-            module.Execute(view, 0, frameOverride: 100);
+            module.Tick(view, 0, frameOverride: 100);
             
             Assert.Single(cmd.Acks);
             Assert.Equal(entity, cmd.Acks[0].Entity);
@@ -104,7 +100,7 @@ namespace ModuleHost.Core.Tests.Network
             view.AddComponent(entity, new NetworkSpawnRequest { DisType = new DISEntityType() });
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity });
             
-            module.Execute(view, 0, frameOverride: 100);
+            module.Tick(view, 0, frameOverride: 100);
             
             Assert.Single(cmd.Acks);
             Assert.Contains((entity, typeof(PendingNetworkAck)), cmd.RemovedComponents);
@@ -120,7 +116,7 @@ namespace ModuleHost.Core.Tests.Network
             view.AddComponent(entity, new NetworkSpawnRequest { DisType = new DISEntityType() });
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity });
             
-            module.Execute(view, 0, frameOverride: 100);
+            module.Tick(view, 0, frameOverride: 100);
             
             Assert.Empty(cmd.Acks); // Should wait
         }
@@ -135,14 +131,11 @@ namespace ModuleHost.Core.Tests.Network
             view.AddComponent(entity, new NetworkSpawnRequest { DisType = new DISEntityType() });
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity });
             
-            // First tick to register pending
-            module.Execute(view, 0, frameOverride: 100);
+            module.Tick(view, 0, frameOverride: 100);
             
-            // Receive ACK from 2
             module.ReceiveLifecycleStatus(entity, 2, EntityLifecycle.Active, cmd, 101);
             Assert.Empty(cmd.Acks);
             
-            // Receive ACK from 3
             module.ReceiveLifecycleStatus(entity, 3, EntityLifecycle.Active, cmd, 102);
             
             Assert.Single(cmd.Acks);
@@ -160,14 +153,12 @@ namespace ModuleHost.Core.Tests.Network
             view.AddComponent(entity, new NetworkSpawnRequest { DisType = new DISEntityType() });
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity });
             
-            // Start at frame 100
-            module.Execute(view, 0, frameOverride: 100);
+            module.Tick(view, 0, frameOverride: 100);
             Assert.Empty(cmd.Acks);
             
-            // Advance past timeout (300 frames)
-            module.Execute(view, 0, frameOverride: 100 + 301);
+            module.Tick(view, 0, frameOverride: 100 + 301);
             
-            Assert.Single(cmd.Acks); // Should have ACKed due to timeout
+            Assert.Single(cmd.Acks);
             Assert.Contains((entity, typeof(PendingNetworkAck)), cmd.RemovedComponents);
         }
 
@@ -178,7 +169,6 @@ namespace ModuleHost.Core.Tests.Network
             var entity1 = new Entity(1, 1);
             var entity2 = new Entity(2, 1);
             
-            // Both entities in reliable mode
             view.AddComponent(entity1, new PendingNetworkAck());
             view.AddComponent(entity1, new NetworkSpawnRequest { DisType = new DISEntityType() });
             view.AddComponent(entity2, new PendingNetworkAck());
@@ -187,25 +177,21 @@ namespace ModuleHost.Core.Tests.Network
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity1 });
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity2 });
             
-            module.Execute(view, 0, frameOverride: 100);
+            module.Tick(view, 0, frameOverride: 100);
             
-            // Both should be pending
             Assert.Empty(cmd.Acks);
             
-            // ACK for entity1 only
             module.ReceiveLifecycleStatus(entity1, 2, EntityLifecycle.Active, cmd, 101);
             module.ReceiveLifecycleStatus(entity1, 3, EntityLifecycle.Active, cmd, 102);
             
-            // Should ACK entity1 only
             Assert.Single(cmd.Acks);
             Assert.Equal(entity1, cmd.Acks[0].Entity);
             
-            // entity2 still pending
             module.ReceiveLifecycleStatus(entity2, 2, EntityLifecycle.Active, cmd, 103);
-            Assert.Single(cmd.Acks); // Still just entity1
+            Assert.Single(cmd.Acks);
             
             module.ReceiveLifecycleStatus(entity2, 3, EntityLifecycle.Active, cmd, 104);
-            Assert.Equal(2, cmd.Acks.Count); // Now both
+            Assert.Equal(2, cmd.Acks.Count);
         }
 
         [Fact]
@@ -218,17 +204,14 @@ namespace ModuleHost.Core.Tests.Network
             view.AddComponent(entity, new NetworkSpawnRequest { DisType = new DISEntityType() });
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity });
             
-            module.Execute(view, 0, frameOverride: 100);
+            module.Tick(view, 0, frameOverride: 100);
             
-            // Entity is pending, now it gets destroyed
             view.DestructionOrders.Add(new DestructionOrder { Entity = entity });
             
-            module.Execute(view, 0, frameOverride: 101);
+            module.Tick(view, 0, frameOverride: 101);
             
-            // Verify: Gateway no longer tracking this entity
-            // If we receive ACK now, it should be ignored
             module.ReceiveLifecycleStatus(entity, 2, EntityLifecycle.Active, cmd, 101);
-            Assert.Empty(cmd.Acks); // No ACK because entity was cleaned up
+            Assert.Empty(cmd.Acks);
         }
 
         [Fact]
@@ -241,21 +224,16 @@ namespace ModuleHost.Core.Tests.Network
             view.AddComponent(entity, new NetworkSpawnRequest { DisType = new DISEntityType() });
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity });
             
-            module.Execute(view, 0, frameOverride: 100);
+            module.Tick(view, 0, frameOverride: 100);
             
-            // Receive ACK from node 2
             module.ReceiveLifecycleStatus(entity, 2, EntityLifecycle.Active, cmd, 101);
             
-            // Receive DUPLICATE ACK from node 2
             module.ReceiveLifecycleStatus(entity, 2, EntityLifecycle.Active, cmd, 102);
             
-            // Still waiting for node 3
             Assert.Empty(cmd.Acks);
             
-            // Now node 3 ACKs
             module.ReceiveLifecycleStatus(entity, 3, EntityLifecycle.Active, cmd, 103);
             
-            // Should complete successfully despite duplicate
             Assert.Single(cmd.Acks);
         }
 
@@ -269,15 +247,12 @@ namespace ModuleHost.Core.Tests.Network
             view.AddComponent(entity, new NetworkSpawnRequest { DisType = new DISEntityType() });
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity });
             
-            module.Execute(view, 0, frameOverride: 100);
+            module.Tick(view, 0, frameOverride: 100);
             
-            // Only node 2 responds (need 2 AND 3)
             module.ReceiveLifecycleStatus(entity, 2, EntityLifecycle.Active, cmd, 101);
             
-            // Should NOT ACK yet
             Assert.Empty(cmd.Acks);
             
-            // Verify PendingNetworkAck still present
             Assert.DoesNotContain((entity, typeof(PendingNetworkAck)), cmd.RemovedComponents);
         }
 
@@ -300,21 +275,16 @@ namespace ModuleHost.Core.Tests.Network
             };
             var reader = new MockDataReader(msg);
             
-            // Need to setup module to be waiting for this entity
             var entity = new Entity(1, 1);
             view.AddComponent(entity, new PendingNetworkAck());
             view.AddComponent(entity, new NetworkSpawnRequest { DisType = new DISEntityType() });
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity });
-            module.Execute(view, 0, frameOverride: 100); // Put in pending state
+            module.Tick(view, 0, frameOverride: 100);
             
-            // Ingress
             translator.PollIngress(reader, cmd, view);
             
-            // We can check internal state or verify partial ack logic.
-            // Since we only sent 1 ack and need 2, it shouldn't ACK yet.
             Assert.Empty(cmd.Acks);
             
-            // Send second ack via translator
              var msg2 = new EntityLifecycleStatusDescriptor 
             { 
                 NodeId = 3, 
@@ -324,25 +294,29 @@ namespace ModuleHost.Core.Tests.Network
             var reader2 = new MockDataReader(msg2);
             translator.PollIngress(reader2, cmd, view);
             
-            // Now should ACK
             Assert.Single(cmd.Acks);
         }
         
         [Fact]
         public void Translator_Egress_PublishesActiveStatus()
         {
-            var (module, elm, view, cmd) = Setup(new MockTopology());
+            using var repo = new EntityRepository();
+            var cmd = ((ISimulationView)repo).GetCommandBuffer();
+            
+            repo.RegisterComponent<NetworkIdentity>();
+            repo.RegisterComponent<PendingNetworkAck>();
+            
+            var gateway = new NetworkGatewayModule(10, 1, new MockTopology(), new EntityLifecycleModule(new[]{10}));
             var map = new Dictionary<long, Entity>();
-            var translator = new EntityLifecycleStatusTranslator(1, module, map);
+            var translator = new EntityLifecycleStatusTranslator(1, gateway, map);
             var writer = new MockDataWriter();
             
-            var entity = new Entity(1, 1);
-            view.AddComponent(entity, new NetworkIdentity { Value = 999 });
-            view.AddComponent(entity, new PendingNetworkAck());
+            var entity = repo.CreateEntity();
+            repo.AddComponent(entity, new NetworkIdentity { Value = 999 });
+            repo.AddComponent(entity, new PendingNetworkAck());
+            repo.SetLifecycleState(entity, EntityLifecycle.Active);
             
-            // Assume query returns this entity (our mock query matches components)
-            
-            translator.ScanAndPublish(view, writer);
+            translator.ScanAndPublish(repo, writer);
             
             Assert.Single(writer.WrittenSamples);
             var status = (EntityLifecycleStatusDescriptor)writer.WrittenSamples[0];
@@ -366,7 +340,6 @@ namespace ModuleHost.Core.Tests.Network
             };
             var reader = new MockDataReader(msg);
             
-            // Should not crash
             translator.PollIngress(reader, cmd, view);
         }
 
@@ -380,7 +353,6 @@ namespace ModuleHost.Core.Tests.Network
             
             var translator = new EntityLifecycleStatusTranslator(1, module, map);
             
-            // Setup both entities pending
             view.AddComponent(entity1, new PendingNetworkAck());
             view.AddComponent(entity1, new NetworkSpawnRequest { DisType = new DISEntityType() });
             view.AddComponent(entity2, new PendingNetworkAck());
@@ -388,9 +360,8 @@ namespace ModuleHost.Core.Tests.Network
             
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity1 });
             view.ConstructionOrders.Add(new ConstructionOrder { Entity = entity2 });
-            module.Execute(view, 0, frameOverride: 100);
+            module.Tick(view, 0, frameOverride: 100);
             
-            // Batch of messages
             var reader = new MockDataReader(
                 new EntityLifecycleStatusDescriptor { NodeId = 2, EntityId = 100, State = EntityLifecycle.Active },
                 new EntityLifecycleStatusDescriptor { NodeId = 2, EntityId = 200, State = EntityLifecycle.Active }
@@ -398,8 +369,6 @@ namespace ModuleHost.Core.Tests.Network
             
             translator.PollIngress(reader, cmd, view);
             
-            // Both should be forwarded to gateway
-            // Verify by completing ACKs
             module.ReceiveLifecycleStatus(entity1, 3, EntityLifecycle.Active, cmd, 101);
             module.ReceiveLifecycleStatus(entity2, 3, EntityLifecycle.Active, cmd, 102);
             
@@ -409,42 +378,47 @@ namespace ModuleHost.Core.Tests.Network
         [Fact]
         public void Translator_Egress_ConstructingEntity_NotPublished()
         {
-            var (module, elm, view, cmd) = Setup(new MockTopology());
+            using var repo = new EntityRepository();
+            repo.RegisterComponent<NetworkIdentity>();
+            repo.RegisterComponent<PendingNetworkAck>();
+            
+            var gateway = new NetworkGatewayModule(10, 1, new MockTopology(), new EntityLifecycleModule(new[]{10}));
             var map = new Dictionary<long, Entity>();
-            var translator = new EntityLifecycleStatusTranslator(1, module, map);
+            var translator = new EntityLifecycleStatusTranslator(1, gateway, map);
             var writer = new MockDataWriter();
             
-            // Test that query returns empty if criteria not met
-            // Since MockQueryBuilder matches components, and we set WithLifecycle(Active)
-            // We need to ensure MockQueryBuilder actually checks lifecycle if possible or we assume it works
-            // In our simple mock, we just don't add matching components or assume MockQueryBuilder is correct.
-            // Wait, MockQueryBuilder implementation in MockSimulationView DOES NOT check lifecycle yet.
-            // We need to update MockQueryBuilder to simulate filtering.
-            // But we can't easily track lifecycle in the view mock without more logic.
-            // Let's assume correct behavior for now by simply not adding the entity to the view at all
-            // OR by observing that ScanAndPublish uses Query()
+            var entity = repo.CreateEntity();
+            repo.AddComponent(entity, new NetworkIdentity { Value = 999 });
+            repo.AddComponent(entity, new PendingNetworkAck());
+            repo.SetLifecycleState(entity, EntityLifecycle.Constructing);
             
-            translator.ScanAndPublish(view, writer);
+            translator.ScanAndPublish(repo, writer);
             Assert.Empty(writer.WrittenSamples);
         }
 
         [Fact]
         public void Translator_Egress_MultipleActiveEntities_AllPublished()
         {
-            var (module, elm, view, cmd) = Setup(new MockTopology());
+            using var repo = new EntityRepository();
+            repo.RegisterComponent<NetworkIdentity>();
+            repo.RegisterComponent<PendingNetworkAck>();
+            
+            var gateway = new NetworkGatewayModule(10, 1, new MockTopology(), new EntityLifecycleModule(new[]{10}));
             var map = new Dictionary<long, Entity>();
-            var translator = new EntityLifecycleStatusTranslator(1, module, map);
+            var translator = new EntityLifecycleStatusTranslator(1, gateway, map);
             var writer = new MockDataWriter();
             
-            var entity1 = new Entity(1, 1);
-            var entity2 = new Entity(2, 1);
+            var entity1 = repo.CreateEntity();
+            repo.AddComponent(entity1, new NetworkIdentity { Value = 100 });
+            repo.AddComponent(entity1, new PendingNetworkAck());
+            repo.SetLifecycleState(entity1, EntityLifecycle.Active);
             
-            view.AddComponent(entity1, new NetworkIdentity { Value = 100 });
-            view.AddComponent(entity1, new PendingNetworkAck());
-            view.AddComponent(entity2, new NetworkIdentity { Value = 200 });
-            view.AddComponent(entity2, new PendingNetworkAck());
+            var entity2 = repo.CreateEntity();
+            repo.AddComponent(entity2, new NetworkIdentity { Value = 200 });
+            repo.AddComponent(entity2, new PendingNetworkAck());
+            repo.SetLifecycleState(entity2, EntityLifecycle.Active);
             
-            translator.ScanAndPublish(view, writer);
+            translator.ScanAndPublish(repo, writer);
             
             Assert.Equal(2, writer.WrittenSamples.Count);
             var ids = writer.WrittenSamples.Select(s => ((EntityLifecycleStatusDescriptor)s).EntityId).ToList();
@@ -457,11 +431,11 @@ namespace ModuleHost.Core.Tests.Network
         {
             var (module, elm, view, cmd) = Setup(new MockTopology());
             var map = new Dictionary<long, Entity> { { 999, new Entity(1, 1) } };
-            var translator = new EntityLifecycleStatusTranslator(1, module, map); // LocalNodeId = 1
+            var translator = new EntityLifecycleStatusTranslator(1, module, map); 
             
             var msg = new EntityLifecycleStatusDescriptor 
             { 
-                NodeId = 1, // Own node
+                NodeId = 1, 
                 EntityId = 999, 
                 State = EntityLifecycle.Active 
             };
@@ -469,7 +443,6 @@ namespace ModuleHost.Core.Tests.Network
             
             translator.PollIngress(reader, cmd, view);
             
-            // Should be filtered
             Assert.Empty(cmd.Acks);
         }
 
@@ -477,18 +450,17 @@ namespace ModuleHost.Core.Tests.Network
         public void Translator_Ingress_UnknownEntity_LogsAndContinues()
         {
             var (module, elm, view, cmd) = Setup(new MockTopology());
-            var map = new Dictionary<long, Entity>(); // Empty - no entities
+            var map = new Dictionary<long, Entity>();
             var translator = new EntityLifecycleStatusTranslator(1, module, map);
             
             var msg = new EntityLifecycleStatusDescriptor 
             { 
                 NodeId = 2, 
-                EntityId = 999, // Not in map
+                EntityId = 999,
                 State = EntityLifecycle.Active 
             };
             var reader = new MockDataReader(msg);
             
-            // Should not crash
             translator.PollIngress(reader, cmd, view);
         }
 
@@ -499,74 +471,89 @@ namespace ModuleHost.Core.Tests.Network
         [Fact]
         public void Egress_ForcePublish_RemovesComponent()
         {
-            var translator = new EntityLifecycleStatusTranslator(1, null!, new Dictionary<long, Entity>());
+            using var repo = new EntityRepository();
+            repo.RegisterComponent<ForceNetworkPublish>();
+            
+            // Dummy gateway for test
+            var dummyGateway = new NetworkGatewayModule(10, 1, new MockEmptyTopology(), new EntityLifecycleModule(new[]{10}));
+            var translator = new EntityLifecycleStatusTranslator(1, dummyGateway, new Dictionary<long, Entity>());
             var writer = new MockDataWriter();
             var system = new NetworkEgressSystem(new[]{translator}, new[]{writer});
             
-            var cmd = new MockCommandBuffer();
-            var view = new MockSimulationView(cmd);
-            var entity = new Entity(1, 1);
-            view.AddComponent(entity, new ForceNetworkPublish());
+            var entity = repo.CreateEntity();
+            repo.AddComponent(entity, new ForceNetworkPublish());
             
-            system.Execute(view, 0);
+            system.Execute(repo, 0);
+            ((EntityCommandBuffer)((ISimulationView)repo).GetCommandBuffer()).Playback(repo);
             
-            Assert.Contains((entity, typeof(ForceNetworkPublish)), cmd.RemovedComponents);
+            Assert.False(((ISimulationView)repo).HasComponent<ForceNetworkPublish>(entity));
         }
 
         [Fact]
         public void Egress_MultipleForcePublish_AllRemoved()
         {
-            var translator = new EntityLifecycleStatusTranslator(1, null!, new Dictionary<long, Entity>());
+            using var repo = new EntityRepository();
+            repo.RegisterComponent<ForceNetworkPublish>();
+            
+            var dummyGateway = new NetworkGatewayModule(10, 1, new MockEmptyTopology(), new EntityLifecycleModule(new[]{10}));
+            var translator = new EntityLifecycleStatusTranslator(1, dummyGateway, new Dictionary<long, Entity>());
             var writer = new MockDataWriter();
             var system = new NetworkEgressSystem(new[]{translator}, new[]{writer});
             
-            var cmd = new MockCommandBuffer();
-            var view = new MockSimulationView(cmd);
+            var entity1 = repo.CreateEntity();
+            repo.AddComponent(entity1, new ForceNetworkPublish());
             
-            var entity1 = new Entity(1, 1);
-            var entity2 = new Entity(2, 1);
-            var entity3 = new Entity(3, 1);
+            var entity2 = repo.CreateEntity();
+            repo.AddComponent(entity2, new ForceNetworkPublish());
             
-            view.AddComponent(entity1, new ForceNetworkPublish());
-            view.AddComponent(entity2, new ForceNetworkPublish());
-            view.AddComponent(entity3, new ForceNetworkPublish());
+            var entity3 = repo.CreateEntity();
+            repo.AddComponent(entity3, new ForceNetworkPublish());
             
-            system.Execute(view, 0);
+            system.Execute(repo, 0);
+            ((EntityCommandBuffer)((ISimulationView)repo).GetCommandBuffer()).Playback(repo);
             
-            Assert.Equal(3, cmd.RemovedComponents.Count);
-            Assert.Contains((entity1, typeof(ForceNetworkPublish)), cmd.RemovedComponents);
-            Assert.Contains((entity2, typeof(ForceNetworkPublish)), cmd.RemovedComponents);
-            Assert.Contains((entity3, typeof(ForceNetworkPublish)), cmd.RemovedComponents);
+            Assert.False(((ISimulationView)repo).HasComponent<ForceNetworkPublish>(entity1));
+            Assert.False(((ISimulationView)repo).HasComponent<ForceNetworkPublish>(entity2));
+            Assert.False(((ISimulationView)repo).HasComponent<ForceNetworkPublish>(entity3));
         }
 
         [Fact]
         public void Egress_NoForcePublish_TranslatorsStillCalled()
         {
-            var translator = new EntityLifecycleStatusTranslator(1, null!, new Dictionary<long, Entity>());
+            var mockTranslator = new MockDescriptorTranslator();
             var writer = new MockDataWriter();
-            var system = new NetworkEgressSystem(new[]{translator}, new[]{writer});
+            var system = new NetworkEgressSystem(new[]{mockTranslator}, new[]{writer});
             
-            var cmd = new MockCommandBuffer();
-            var view = new MockSimulationView(cmd);
+            using var repo = new EntityRepository();
             
-            // No ForceNetworkPublish components
+            system.Execute(repo, 0);
             
-            system.Execute(view, 0);
-            
-            // Verify translators were called (ScanAndPublish)
-            // Hard to verify without side effects, but at minimum shouldn't crash
-            Assert.Empty(cmd.RemovedComponents);
+            Assert.True(mockTranslator.ScanAndPublishCalled);
         }
 
         [Fact]
         public void Egress_TranslatorWriterMismatch_ThrowsException()
         {
-            var translator1 = new EntityLifecycleStatusTranslator(1, null!, new Dictionary<long, Entity>());
-            var translator2 = new EntityLifecycleStatusTranslator(1, null!, new Dictionary<long, Entity>());
+            var dummyGateway = new NetworkGatewayModule(10, 1, new MockEmptyTopology(), new EntityLifecycleModule(new[]{10}));
+            var translator1 = new EntityLifecycleStatusTranslator(1, dummyGateway, new Dictionary<long, Entity>());
+            var translator2 = new EntityLifecycleStatusTranslator(1, dummyGateway, new Dictionary<long, Entity>());
             var writer = new MockDataWriter();
             
             Assert.Throws<ArgumentException>(() => 
                 new NetworkEgressSystem(new[]{translator1, translator2}, new[]{writer}));
+        }
+        
+        // Helper Mock
+        private class MockDescriptorTranslator : IDescriptorTranslator
+        {
+            public bool ScanAndPublishCalled = false;
+            public string TopicName => "Mock";
+            
+            public void PollIngress(IDataReader reader, IEntityCommandBuffer cmd, ISimulationView view) { }
+            public void ScanAndPublish(ISimulationView view, IDataWriter writer) 
+            {
+                ScanAndPublishCalled = true;
+            }
         }
     }
 }

@@ -8,6 +8,7 @@ using ModuleHost.Core.Network.Translators;
 using ModuleHost.Core.ELM;
 using ModuleHost.Core.Tests.Mocks;
 using ModuleHost.Core.Network.Messages;
+using ModuleHost.Core.Abstractions;
 using Xunit;
 
 namespace ModuleHost.Core.Tests.Network
@@ -21,9 +22,8 @@ namespace ModuleHost.Core.Tests.Network
             RegisterComponents(repo);
             
             var networkIdToEntity = new Dictionary<long, Entity>();
-            var translator = new EntityMasterTranslator(1, networkIdToEntity, null!);
+            var translator = new EntityMasterTranslator(1, networkIdToEntity);
             
-            // Create 1000 entities via EntityMaster messages
             var samples = new List<IDataSample>();
             for (int i = 0; i < 1000; i++)
             {
@@ -42,16 +42,14 @@ namespace ModuleHost.Core.Tests.Network
             }
             
             var reader = new MockDataReader(samples.ToArray());
-            var cmd = repo.GetCommandBuffer();
+            var cmd = ((ISimulationView)repo).GetCommandBuffer();
             
             var startTime = DateTime.UtcNow;
             translator.PollIngress(reader, cmd, repo);
-            cmd.Playback();
+            ((EntityCommandBuffer)cmd).Playback(repo);
             var duration = DateTime.UtcNow - startTime;
             
-            // Verify all created
             Assert.Equal(1000, networkIdToEntity.Count);
-            // Relaxed timing assertion for CI environments where it might be slower
             Assert.True(duration.TotalMilliseconds < 2000, $"Creation took {duration.TotalMilliseconds}ms (expected <2000ms)");
         }
         
@@ -61,7 +59,6 @@ namespace ModuleHost.Core.Tests.Network
             using var repo = new EntityRepository();
             RegisterComponents(repo);
             
-            // Create 1000 Ghost entities
             var entities = new List<Entity>();
             for (int i = 0; i < 1000; i++)
             {
@@ -71,7 +68,6 @@ namespace ModuleHost.Core.Tests.Network
                 entities.Add(entity);
             }
             
-            // Promote all to Constructing
             var startTime = DateTime.UtcNow;
             foreach (var entity in entities)
             {
@@ -79,10 +75,9 @@ namespace ModuleHost.Core.Tests.Network
             }
             var duration = DateTime.UtcNow - startTime;
             
-            // Verify all promoted
             foreach (var entity in entities)
             {
-                Assert.Equal(EntityLifecycle.Constructing, repo.GetLifecycleState(entity));
+                Assert.Equal(EntityLifecycle.Constructing, repo.GetHeader(entity.Index).LifecycleState);
             }
             
             Assert.True(duration.TotalMilliseconds < 500, $"Promotion took {duration.TotalMilliseconds}ms (expected <500ms)");
@@ -96,7 +91,6 @@ namespace ModuleHost.Core.Tests.Network
             
             var networkIdToEntity = new Dictionary<long, Entity>();
             
-            // Create 1000 entities
             for (int i = 0; i < 1000; i++)
             {
                 var entity = repo.CreateEntity();
@@ -106,13 +100,13 @@ namespace ModuleHost.Core.Tests.Network
                 
                 var ownership = new DescriptorOwnership();
                 ownership.Map[OwnershipExtensions.PackKey(NetworkConstants.WEAPON_STATE_DESCRIPTOR_ID, 0)] = 1;
-                repo.AddManagedComponent(entity, ownership);
+                repo.AddComponent(entity, ownership);
                 
                 networkIdToEntity[i] = entity;
             }
             
-            // Transfer ownership for all entities
-            var translator = new OwnershipUpdateTranslator(2, networkIdToEntity);
+            var descriptorMap = new DescriptorOwnershipMap();
+            var translator = new OwnershipUpdateTranslator(2, descriptorMap, networkIdToEntity);
             var samples = new List<IDataSample>();
             
             for (int i = 0; i < 1000; i++)
@@ -133,19 +127,18 @@ namespace ModuleHost.Core.Tests.Network
             }
             
             var reader = new MockDataReader(samples.ToArray());
-            var cmd = repo.GetCommandBuffer();
+            var cmd = ((ISimulationView)repo).GetCommandBuffer();
             
             var startTime = DateTime.UtcNow;
-            translator.ProcessOwnershipUpdate(reader, cmd, repo);
-            cmd.Playback();
+            translator.PollIngress(reader, cmd, repo);
+            ((EntityCommandBuffer)cmd).Playback(repo);
             var duration = DateTime.UtcNow - startTime;
             
-            // Verify all updated
             int updatedCount = 0;
             foreach (var kvp in networkIdToEntity)
             {
                 var entity = kvp.Value;
-                var ownership = repo.GetManagedComponentRO<DescriptorOwnership>(entity);
+                var ownership = ((ISimulationView)repo).GetManagedComponentRO<DescriptorOwnership>(entity);
                 long key = OwnershipExtensions.PackKey(NetworkConstants.WEAPON_STATE_DESCRIPTOR_ID, 0);
                 
                 if (ownership.Map[key] == 2)
@@ -162,12 +155,10 @@ namespace ModuleHost.Core.Tests.Network
             using var repo = new EntityRepository();
             RegisterComponents(repo);
             
-            var topo = new StaticNetworkTopology(1, new[] { 1, 2, 3 }); // 3-node cluster
+            var topo = new StaticNetworkTopology(1, new[] { 1, 2, 3 });
             var elm = new EntityLifecycleModule(new[] { 10 });
             var gateway = new NetworkGatewayModule(10, 1, topo, elm);
-            gateway.Initialize(null!);
             
-            // Create 100 entities in reliable mode
             var entities = new List<Entity>();
             for (int i = 0; i < 100; i++)
             {
@@ -176,26 +167,22 @@ namespace ModuleHost.Core.Tests.Network
                 repo.AddComponent(entity, new PendingNetworkAck());
                 entities.Add(entity);
                 
-                var cmd = repo.GetCommandBuffer();
+                var cmd = ((ISimulationView)repo).GetCommandBuffer();
                 elm.BeginConstruction(entity, 1, repo.GlobalVersion, cmd);
-                cmd.Playback();
+                ((EntityCommandBuffer)cmd).Playback(repo);
             }
             
-            // Gateway processes - all should be pending
-            gateway.Execute(repo, 0);
+            gateway.Tick(repo, 0);
             
-            // Advance time past timeout
             for (int i = 0; i < 305; i++)
             {
                 repo.Tick();
             }
             
-            // Gateway check timeout - all should ACK due to timeout
             var startTime = DateTime.UtcNow;
-            gateway.Execute(repo, 0);
+            gateway.Tick(repo, 0);
             var duration = DateTime.UtcNow - startTime;
             
-            // Verify reasonable performance even with 100 timeouts
             Assert.True(duration.TotalMilliseconds < 1000, $"Timeout check took {duration.TotalMilliseconds}ms (expected <1000ms)");
         }
         
@@ -206,6 +193,13 @@ namespace ModuleHost.Core.Tests.Network
             repo.RegisterComponent<PendingNetworkAck>();
             repo.RegisterComponent<ForceNetworkPublish>();
             repo.RegisterComponent<NetworkOwnership>();
+            repo.RegisterManagedComponent<DescriptorOwnership>();
+            
+            repo.RegisterEvent<ConstructionOrder>();
+            repo.RegisterEvent<ConstructionAck>();
+            repo.RegisterEvent<DestructionOrder>();
+            repo.RegisterEvent<DescriptorAuthorityChanged>();
+            repo.RegisterEvent<DescriptorAuthorityChanged>();
         }
     }
 }

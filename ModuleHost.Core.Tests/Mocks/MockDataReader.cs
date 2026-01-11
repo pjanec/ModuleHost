@@ -20,7 +20,9 @@ namespace ModuleHost.Core.Tests.Mocks
                 return 0;
             }
         }
-    }
+
+		public long InstanceId => throw new NotImplementedException();
+	}
 
     public class MockDataReader : IDataReader
     {
