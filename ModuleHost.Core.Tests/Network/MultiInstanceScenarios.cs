@@ -33,6 +33,7 @@ namespace ModuleHost.Core.Tests.Network
             var entity1 = repo1.CreateEntity();
             // Setup ownership as Local Node 1
             repo1.AddComponent(entity1, new NetworkOwnership { LocalNodeId = 1, PrimaryOwnerId = 1 });
+            repo1.AddComponent(entity1, new NetworkIdentity { Value = 100 });
             
             repo1.AddComponent(entity1, new NetworkSpawnRequest 
             { 
@@ -48,6 +49,11 @@ namespace ModuleHost.Core.Tests.Network
             // Verify Node 1 State
             // Replay command buffer to apply changes!
             ((EntityCommandBuffer)((ISimulationView)repo1).GetCommandBuffer()).Playback(repo1);
+
+            // Populate WeaponStates (simulating game logic)
+            var ws1 = ((ISimulationView)repo1).GetManagedComponentRO<WeaponStates>(entity1);
+            ws1.Weapons[0] = new WeaponState();
+            ws1.Weapons[1] = new WeaponState();
 
             var ownership1 = ((ISimulationView)repo1).GetManagedComponentRO<DescriptorOwnership>(entity1);
             
@@ -71,7 +77,7 @@ namespace ModuleHost.Core.Tests.Network
             {
                 EntityId = 100,
                 OwnerId = 1,
-                Type = new DISEntityType { Kind = 1 }
+                Type = new DISEntityType { Kind = 1, Category = 1 }
             };
             
             var reader = new MockDataReader(new MockDataSample { Data = masterMsg, InstanceState = DdsInstanceState.Alive });
@@ -112,6 +118,10 @@ namespace ModuleHost.Core.Tests.Network
             
             // === Data Replication ===
             // Node 1 sends update for Turret 0
+            
+            // Force Active so it gets picked up by Translator (which filters for Active entities)
+            repo1.SetLifecycleState(entity1, EntityLifecycle.Active);
+
             var wsTranslator1 = new WeaponStateTranslator(1, new Dictionary<long, Entity> { { 100, entity1 } });
             var writer1 = new MockDataWriter();
             wsTranslator1.ScanAndPublish(repo1, writer1);

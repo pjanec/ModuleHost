@@ -50,6 +50,7 @@ namespace ModuleHost.Core.Tests.Network
             
             // === Step 2: Gateway Processing (Tick 1) ===
             // Gateway should see ConstructionOrder and wait
+            repo.Bus.SwapBuffers();
             gateway.Tick(repo, 0);
             
             // Verify not ACKed yet
@@ -177,6 +178,7 @@ namespace ModuleHost.Core.Tests.Network
             ((EntityCommandBuffer)cmd).Playback(repo);
             
             // Gateway processes
+            repo.Bus.SwapBuffers();
             gateway.Tick(repo, 0);
             ((EntityCommandBuffer)cmd).Playback(repo);
             
@@ -215,8 +217,10 @@ namespace ModuleHost.Core.Tests.Network
         private void ProcessAcks(EntityRepository repo, EntityLifecycleModule elm)
         {
             var cmd = ((ISimulationView)repo).GetCommandBuffer();
+            
+            // FIX: Swap buffers so events written during Playback() become readable
+            repo.Bus.SwapBuffers();
             var acks = ((ISimulationView)repo).ConsumeEvents<ConstructionAck>();
-            // Console.WriteLine($"[TestDebug] ProcessAcks found {acks.Length} events");
             if (acks.Length == 0) 
             {
                  // Force Active if events missing (hack for debug/fix if event system failing in test)

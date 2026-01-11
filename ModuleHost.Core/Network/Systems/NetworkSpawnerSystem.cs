@@ -4,6 +4,7 @@ using Fdp.Kernel.Tkb;
 using ModuleHost.Core.Abstractions;
 using ModuleHost.Core.ELM;
 using ModuleHost.Core.Network.Interfaces;
+using ModuleHost.Core.Network;
 
 namespace ModuleHost.Core.Network.Systems
 {
@@ -167,6 +168,13 @@ namespace ModuleHost.Core.Network.Systems
             
             // 3. WeaponState (multi-instance)
             int weaponInstanceCount = GetWeaponInstanceCount(request.DisType);
+            
+            // Ensure WeaponStates container exists if we have weapons
+            if (weaponInstanceCount > 0 && !repo.HasManagedComponent<WeaponStates>(entity))
+            {
+                repo.SetManagedComponent(entity, new WeaponStates());
+            }
+
             for (int i = 0; i < weaponInstanceCount; i++)
             {
                 AssignDescriptorOwnership(descOwnership, NetworkConstants.WEAPON_STATE_DESCRIPTOR_ID, request, i);

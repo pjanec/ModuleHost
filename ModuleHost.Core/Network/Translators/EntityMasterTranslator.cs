@@ -57,6 +57,10 @@ namespace ModuleHost.Core.Network.Translators
                 {
                     // Entity doesn't exist - create it directly (Master-first scenario)
                     entity = repo.CreateEntity();
+                    
+                    // FIX: Set to Ghost immediately so it isn't visible as Active before Spawner/ELM runs
+                    repo.SetLifecycleState(entity, EntityLifecycle.Ghost);
+
                     isNewEntity = true;
                     
                     // Set NetworkIdentity
