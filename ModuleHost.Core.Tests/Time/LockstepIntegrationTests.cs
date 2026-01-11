@@ -23,7 +23,7 @@ namespace ModuleHost.Core.Tests.Time
             
             // Master starts Frame 0, publishes Order 0
             var masterTime = master.Step(0.016f);
-            Assert.Equal(0, masterTime.FrameNumber);
+            Assert.Equal(1, masterTime.FrameNumber);
             Assert.Equal(0.016f, masterTime.DeltaTime, precision: 3);
             
             // Initial slave update (nothing yet)
@@ -35,7 +35,7 @@ namespace ModuleHost.Core.Tests.Time
             // Slaves receive Order 0, execute Frame 0
             slave1Time = slave1.Update();
             var slave2Time = slave2.Update();
-            Assert.Equal(0, slave1Time.FrameNumber);
+            Assert.Equal(1, slave1Time.FrameNumber);
             Assert.Equal(0.016f, slave1Time.DeltaTime, precision: 3);
             
             // --- FRAME 1 ---
@@ -48,7 +48,7 @@ namespace ModuleHost.Core.Tests.Time
             
             // Master receives ACKs, starts Frame 1, publishes Order 1
             masterTime = master.Step(0.016f);
-            Assert.Equal(1, masterTime.FrameNumber);
+            Assert.Equal(2, masterTime.FrameNumber);
             Assert.Equal(0.016f, masterTime.DeltaTime, precision: 3);
             
             eventBus.SwapBuffers();
@@ -56,7 +56,7 @@ namespace ModuleHost.Core.Tests.Time
             // Slaves receive Order 1, execute Frame 1
             slave1Time = slave1.Update();
             slave2Time = slave2.Update();
-            Assert.Equal(1, slave1Time.FrameNumber);
+            Assert.Equal(2, slave1Time.FrameNumber);
             Assert.Equal(0.016f, slave1Time.DeltaTime, precision: 3);
         }
         

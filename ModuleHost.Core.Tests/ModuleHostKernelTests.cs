@@ -10,7 +10,7 @@ namespace ModuleHost.Core.Tests
     public class ModuleHostKernelTests
     {
         [Fact]
-        public void ModuleDeltaTime_AccumulatesCorrectly()
+        public async System.Threading.Tasks.Task ModuleDeltaTime_AccumulatesCorrectly()
         {
             // Arrange
             var world = new EntityRepository();
@@ -29,7 +29,11 @@ namespace ModuleHost.Core.Tests
             }
             
             // Wait for async execution
-            System.Threading.SpinWait.SpinUntil(() => testModule.WasExecuted, 2000);
+            var timeout = DateTime.UtcNow.AddSeconds(2);
+            while (!testModule.WasExecuted && DateTime.UtcNow < timeout)
+            {
+                await System.Threading.Tasks.Task.Delay(10);
+            }
             
             // Assert: Module should have received delta time of ~0.1s, not 0.016s
             Assert.True(testModule.WasExecuted, "Module should have executed");
@@ -49,7 +53,11 @@ namespace ModuleHost.Core.Tests
             }
             
             // Wait again
-            System.Threading.SpinWait.SpinUntil(() => testModule.WasExecuted, 2000);
+            timeout = DateTime.UtcNow.AddSeconds(2);
+            while (!testModule.WasExecuted && DateTime.UtcNow < timeout)
+            {
+                await System.Threading.Tasks.Task.Delay(10);
+            }
             
             // Should have executed twice now
             Assert.InRange(testModule.LastDeltaTime, 0.095f, 0.105f);
@@ -83,6 +91,18 @@ namespace ModuleHost.Core.Tests
         public string Name => "DeltaTimeTracker";
         public ModuleTier Tier => ModuleTier.Slow;
         public int UpdateFrequency => 6; // 10 Hz
+        
+        public ExecutionPolicy Policy 
+        {
+            get
+            {
+                var p = Tier == ModuleTier.Fast 
+                    ? ExecutionPolicy.FastReplica() 
+                    : ExecutionPolicy.SlowBackground(UpdateFrequency <= 1 ? 60 : 60/UpdateFrequency);
+                p.MaxExpectedRuntimeMs = 2000;
+                return p;
+            }
+        }
         
         public bool WasExecuted { get; private set; }
         public float LastDeltaTime { get; private set; }

@@ -22,6 +22,12 @@ namespace ModuleHost.Core.Tests.Integration
             var accumulator = new EventAccumulator();
             using var kernel = new ModuleHostKernel(live, accumulator);
             
+            // Fix: Register component schema for internal providers
+            kernel.SetSchemaSetup(repo => 
+            {
+                repo.RegisterComponent<Position>();
+            });
+            
             var testModule = new TestModule();
             kernel.RegisterModule(testModule);
             kernel.Initialize(); // REQUIRED: Initialize kernel before updates
@@ -46,6 +52,9 @@ namespace ModuleHost.Core.Tests.Integration
             public string Name => "Test";
             public ModuleTier Tier => ModuleTier.Fast;
             public int UpdateFrequency => 1;
+            
+            // Fix: Override policy to prevent timeout on slow runners (which leads to zombie tasks and AVs)
+            public ExecutionPolicy Policy => ExecutionPolicy.FastReplica().WithTimeout(2000);
             
             public bool DidRun { get; private set; }
             public int LastSeenX { get; private set; }

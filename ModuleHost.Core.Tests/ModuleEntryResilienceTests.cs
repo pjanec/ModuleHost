@@ -31,6 +31,24 @@ namespace ModuleHost.Core.Tests
             public int FailureThreshold => 5;
             public int CircuitResetTimeoutMs => 10000;
             
+            public ExecutionPolicy Policy 
+            {
+                get
+                {
+                    // Base policy
+                    var p = Tier == ModuleTier.Fast 
+                        ? ExecutionPolicy.FastReplica() 
+                        : ExecutionPolicy.SlowBackground(UpdateFrequency <= 1 ? 60 : 60/UpdateFrequency);
+                    
+                    // Apply overrides
+                    p.MaxExpectedRuntimeMs = MaxExpectedRuntimeMs;
+                    p.FailureThreshold = FailureThreshold;
+                    p.CircuitResetTimeoutMs = CircuitResetTimeoutMs;
+                    
+                    return p;
+                }
+            }
+            
             public void Tick(ISimulationView view, float deltaTime) { }
             public void RegisterSystems(ISystemRegistry registry) { }
         }

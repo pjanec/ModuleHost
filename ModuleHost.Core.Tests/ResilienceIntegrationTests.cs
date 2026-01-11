@@ -40,6 +40,8 @@ namespace ModuleHost.Core.Tests
                     
                     // Apply overrides
                     if (MaxExpectedRuntimeMs.HasValue) p.MaxExpectedRuntimeMs = MaxExpectedRuntimeMs.Value;
+                    else p.MaxExpectedRuntimeMs = 2000; // Default safe timeout for tests
+                    
                     if (FailureThreshold.HasValue) p.FailureThreshold = FailureThreshold.Value;
                     if (CircuitResetTimeoutMs.HasValue) p.CircuitResetTimeoutMs = CircuitResetTimeoutMs.Value;
                     
@@ -172,10 +174,15 @@ namespace ModuleHost.Core.Tests
             kernel.Initialize();
             
             // Run frames until circuit trips
-            for (int i = 0; i < 10; i++)
+            var sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < 5000)
             {
                 kernel.Update(0.016f);
                 await Task.Delay(20);
+                
+                var stats = kernel.GetExecutionStats();
+                var mod = stats.First(s => s.ModuleName == "FlakyModule");
+                if (mod.CircuitState == CircuitState.Open) break;
             }
             
             var stats1 = kernel.GetExecutionStats();

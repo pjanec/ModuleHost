@@ -49,6 +49,10 @@ namespace ModuleHost.Core.Providers
                     
                     _lastSeenTick = _liveWorld.GlobalVersion;
                 }
+                else 
+                {
+                    // Console.WriteLine("[Shared] Reusing snapshot");
+                }
                 
                 _activeReaders++;
                 return _currentSnapshot;

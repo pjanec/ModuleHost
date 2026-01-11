@@ -33,6 +33,8 @@ namespace ModuleHost.Core.Time
             
             // Register event type
             _eventBus.Register<TimePulseDescriptor>();
+            
+            _lastEventsTicks = Stopwatch.GetTimestamp();
         }
         
         public GlobalTime Update()

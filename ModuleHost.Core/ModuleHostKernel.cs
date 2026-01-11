@@ -470,7 +470,9 @@ namespace ModuleHost.Core
                 }
                 
                 // If idle, check frequency
-                if (ShouldRunThisFrame(entry))
+                bool shouldRun = ShouldRunThisFrame(entry);
+                
+                if (shouldRun)
                 {
                     ISimulationView view;
                     
@@ -505,6 +507,9 @@ namespace ModuleHost.Core
                         {
                             entry.Module.Tick(view, moduleDelta);
                             System.Threading.Interlocked.Increment(ref entry.ExecutionCount);
+                            
+                            // Playback commands immediately for sync modules
+                            PlaybackCommands(entry);
                         }
                         catch (Exception ex)
                         {
@@ -587,95 +592,96 @@ namespace ModuleHost.Core
                 return;
             }
             
-            try
+            // 2. Determine Timeout
+            int timeout = entry.MaxExpectedRuntimeMs;
+            if (timeout <= 0)
             {
-                // 2. Determine Timeout
-                int timeout = entry.MaxExpectedRuntimeMs;
-                if (timeout <= 0)
+                timeout = 1000; // Default safety timeout
+            }
+            
+            // 3. Create Cancellation Token (for cooperative cancellation)
+            using var cts = new CancellationTokenSource(timeout);
+            
+            // 4. Run Module with Timeout Race
+            // We return Exception? to avoid throwing on thread pool which might crash test runner
+            var tickTask = Task.Run<Exception?>(() => 
+            {
+                try
                 {
-                    timeout = 1000; // Default safety timeout
+                    entry.Module.Tick(view, dt);
+                    System.Threading.Interlocked.Increment(ref entry.ExecutionCount);
+                    return null; // Success
+                }
+                catch (Exception ex)
+                {
+                    return ex; // Return exception as result
+                }
+            }, cts.Token);
+            
+            var delayTask = Task.Delay(timeout);
+            var completedTask = await Task.WhenAny(tickTask, delayTask);
+            
+            // 5. Check Result
+            if (completedTask == tickTask)
+            {
+                // Module completed within timeout
+                Exception? result = null;
+                try
+                {
+                    result = await tickTask;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Cancelled
+                    entry.CircuitBreaker?.RecordFailure("Cancelled");
+                    Console.Error.WriteLine($"[ModuleHost][CANCELLED] Module '{entry.Module.Name}' was cancelled.");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    // Should be caught inside, but just in case
+                    result = ex;
                 }
                 
-                // 3. Create Cancellation Token (for cooperative cancellation)
-                using var cts = new CancellationTokenSource(timeout);
-                
-                // 4. Run Module with Timeout Race
-                var tickTask = Task.Run(() => 
+                if (result == null)
                 {
-                    try
-                    {
-                        entry.Module.Tick(view, dt);
-                        System.Threading.Interlocked.Increment(ref entry.ExecutionCount);
-                    }
-                    catch (Exception ex)
-                    {
-                        // Log exception from inside module
-                        Console.Error.WriteLine($"[ModuleHost] Module '{entry.Module.Name}' threw exception: {ex.Message}");
-                        Console.Error.WriteLine(ex.StackTrace);
-                        throw; // Re-throw to be caught by outer handler
-                    }
-                }, cts.Token);
-                
-                var delayTask = Task.Delay(timeout);
-                var completedTask = await Task.WhenAny(tickTask, delayTask);
-                
-                // 5. Check Result
-                if (completedTask == tickTask)
-                {
-                    // Module completed within timeout
-                    await tickTask; // Propagate any exceptions
-                    
                     // Success - record in circuit breaker
                     entry.CircuitBreaker?.RecordSuccess();
                 }
                 else
                 {
-                    // TIMEOUT
-                    entry.CircuitBreaker?.RecordFailure("Timeout");
+                    // Exception occurred
+                    Exception ex = result;
+                    Console.Error.WriteLine($"[ModuleHost] Module '{entry.Module.Name}' threw exception: {ex.Message}");
+                    Console.Error.WriteLine(ex.StackTrace);
+                    
+                    entry.CircuitBreaker?.RecordFailure(ex.GetType().Name);
                     
                     Console.Error.WriteLine(
-                        $"[ModuleHost][TIMEOUT] Module '{entry.Module.Name}' timed out after {timeout}ms. " +
-                        $"Task abandoned (may continue running in background as zombie).");
-                    
-                    // Note: We cannot forcefully kill the task in C#
-                    // It becomes a "zombie" task that may continue running
-                    // This is acceptable - the module will be disabled by circuit breaker
+                        $"[ModuleHost][CRASH] Module '{entry.Module.Name}' crashed: {ex.Message}");
                 }
             }
-            catch (OperationCanceledException)
+            else
             {
-                // Task was cancelled due to timeout
-                entry.CircuitBreaker?.RecordFailure("Cancelled");
+                // TIMEOUT
+                entry.CircuitBreaker?.RecordFailure("Timeout");
                 
                 Console.Error.WriteLine(
-                    $"[ModuleHost][CANCELLED] Module '{entry.Module.Name}' was cancelled.");
-            }
-            catch (Exception ex)
-            {
-                // Module crashed with unhandled exception
-                entry.CircuitBreaker?.RecordFailure(ex.GetType().Name);
+                    $"[ModuleHost][TIMEOUT] Module '{entry.Module.Name}' timed out after {timeout}ms. " +
+                    $"Task abandoned (may continue running in background as zombie).");
                 
-                Console.Error.WriteLine(
-                    $"[ModuleHost][CRASH] Module '{entry.Module.Name}' crashed: {ex.Message}");
-                Console.Error.WriteLine($"Exception Type: {ex.GetType().FullName}");
-                Console.Error.WriteLine(ex.StackTrace);
+                // Prevent unobserved task exception if the zombie task eventually faults
+                _ = tickTask.ContinueWith(t => 
+                {
+                     if (t.IsFaulted) { var _ = t.Exception; } 
+                }, TaskContinuationOptions.OnlyOnFaulted);
             }
         }
 
         private void HarvestEntry(ModuleEntry entry)
         {
             // 1. Playback commands
-            if (entry.LeasedView is EntityRepository repo)
-            {
-                if (repo._perThreadCommandBuffer != null)
-                {
-                    foreach (var cmdBuffer in repo._perThreadCommandBuffer.Values)
-                    {
-                        if (cmdBuffer.HasCommands)
-                            cmdBuffer.Playback(_liveWorld);
-                    }
-                }
-            }
+            PlaybackCommands(entry);
             
             // 2. Release view
             if (entry.LeasedView != null)
@@ -694,6 +700,28 @@ namespace ModuleHost.Core
             entry.CurrentTask = null;
         }
 
+        private void PlaybackCommands(ModuleEntry entry)
+        {
+            if (entry.LeasedView is EntityRepository repo)
+            {
+                if (repo._perThreadCommandBuffer != null)
+                {
+                    foreach (var cmdBuffer in repo._perThreadCommandBuffer.Values)
+                    {
+                        if (cmdBuffer.HasCommands)
+                        {
+                            Console.WriteLine($"[Playback] Playing commands for {entry.Module.Name}");
+                            cmdBuffer.Playback(_liveWorld);
+                        }
+                        else 
+                        {
+                            Console.WriteLine($"[Playback] No commands for {entry.Module.Name}");
+                        }
+                    }
+                }
+            }
+        }
+        
         public List<ModuleStats> GetExecutionStats()
         {
             var stats = new List<ModuleStats>();
@@ -839,6 +867,22 @@ namespace ModuleHost.Core
         
         public void Dispose()
         {
+            // Wait for pending tasks to minimize access violations during shutdown
+            // especially for Slow/Async modules that might be accessing leased views.
+            var pendingTasks = _modules.Where(m => m.CurrentTask != null && !m.CurrentTask.IsCompleted)
+                                       .Select(m => m.CurrentTask!)
+                                       .ToArray();
+            
+            if (pendingTasks.Length > 0)
+            {
+                try 
+                {
+                    Task.WaitAll(pendingTasks, 1000); // Wait up to 1s
+                }
+                catch (AggregateException) { /* Ignore faults */ }
+                catch (TimeoutException) { /* Proceed anyway */ }
+            }
+
             // Dispose all providers
             foreach (var entry in _modules)
             {

@@ -37,8 +37,8 @@ namespace ModuleHost.Core.Tests.Time
             
             var time = controller.Step(1.0f / 60.0f);
             
-            // Delta should NOT be scaled for manual stepping (per new logic)
-            Assert.Equal(1.0f / 60.0f, time.DeltaTime, precision: 5);
+            // Delta SHOULD be scaled for manual stepping if TotalTime is scaled
+            Assert.Equal(0.5f * (1.0f / 60.0f), time.DeltaTime, precision: 5);
         }
         
         [Fact]

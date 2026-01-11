@@ -25,12 +25,12 @@ namespace ModuleHost.Core.Tests.Time
             var bus = new FdpEventBus();
             var slave = new SteppedSlaveController(bus, 1, 0.016f);
             
-            // Publish Order 0
-            bus.Publish(new FrameOrderDescriptor { FrameID = 0, FixedDelta = 0.016f });
+            // Publish Order 1
+            bus.Publish(new FrameOrderDescriptor { FrameID = 1, FixedDelta = 0.016f });
             bus.SwapBuffers();
             
             var time = slave.Update();
-            Assert.Equal(0, time.FrameNumber);
+            Assert.Equal(1, time.FrameNumber);
             Assert.Equal(0.016f, time.DeltaTime, precision: 3);
         }
         
@@ -40,8 +40,8 @@ namespace ModuleHost.Core.Tests.Time
             var bus = new FdpEventBus();
             var slave = new SteppedSlaveController(bus, 1, 0.016f);
             
-            // Execute Frame 0
-            bus.Publish(new FrameOrderDescriptor { FrameID = 0, FixedDelta = 0.016f });
+            // Execute Frame 1
+            bus.Publish(new FrameOrderDescriptor { FrameID = 1, FixedDelta = 0.016f });
             bus.SwapBuffers();
             
             slave.Update();
@@ -54,7 +54,7 @@ namespace ModuleHost.Core.Tests.Time
             
             var acks = bus.Consume<FrameAckDescriptor>();
             Assert.Single(acks.ToArray());
-            Assert.Equal(0, acks[0].FrameID);
+            Assert.Equal(1, acks[0].FrameID);
             Assert.Equal(1, acks[0].NodeID);
         }
     }

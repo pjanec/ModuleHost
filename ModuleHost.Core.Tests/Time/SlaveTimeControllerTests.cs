@@ -10,7 +10,7 @@ namespace ModuleHost.Core.Tests.Time
 {
     public class SlaveTimeControllerTests
     {
-        private long _currentTicks = 1000000;
+        private long _currentTicks = 0;
         private readonly long _freq = Stopwatch.Frequency;
         
         private long GetTicks() => _currentTicks;
@@ -105,9 +105,9 @@ namespace ModuleHost.Core.Tests.Time
             float dt = t.DeltaTime;
             double total = t.TotalTime;
             
-            // With fix: dt should be 0.1 (normal delta after snap).
+            // With fix: dt should be 0.0 (snap consumes delta to 'Now')
             // Without fix: dt would include the gap (5.1).
-            Assert.Equal(0.1f, dt, precision: 2);
+            Assert.Equal(0.0f, dt, precision: 2);
             Assert.Equal(6.1, total, precision: 1); 
         }
     }

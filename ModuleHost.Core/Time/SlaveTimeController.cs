@@ -18,6 +18,7 @@ namespace ModuleHost.Core.Time
         
         // Virtual clock (PLL-adjusted)
         private long _virtualWallTicks = 0;
+        private long _lastUpdateTicks = 0; // For tick source delta calc
         
         // Time state
         private double _totalTime = 0.0;
@@ -46,6 +47,11 @@ namespace ModuleHost.Core.Time
             if (_tickSource != null)
             {
                 _virtualWallTicks = _tickSource();
+                _lastUpdateTicks = _virtualWallTicks;
+            }
+            else
+            {
+                _lastUpdateTicks = _wallClock.ElapsedTicks;
             }
             
             // Register as consumer
@@ -77,7 +83,13 @@ namespace ModuleHost.Core.Time
             {
                 // Forced sync
                 _virtualWallTicks = targetWallTicks;
-                _totalTime = pulse.SimTimeSnapshot; // Snap sim time too!
+                
+                // Snap sim time, accounting for time elapsed since pulse using new scale
+                double timeSincePulseSec = timeSincePulse / (double)Stopwatch.Frequency;
+                _totalTime = pulse.SimTimeSnapshot + (timeSincePulseSec * _timeScale); 
+                
+                // Reset delta tracking to prevent double-counting the gap
+                _lastUpdateTicks = currentWallTicks;
                 
                 _errorFilter.Reset();
                 _currentError = 0.0;
@@ -104,19 +116,9 @@ namespace ModuleHost.Core.Time
             
             if (_tickSource != null)
             {
-                // Testing mode: external ticks (don't restart)
-                // Assuming monotonic ticks from source
                 long now = _tickSource();
-                // We need to track last ticks for delta... 
-                // This breaks manual accumulation "Restart" paradigm if we don't track last.
-                // Fallback: Using _virtualWallTicks to imply last? No.
-                // Simplification: In testing, just use 16ms?
-                // Revert to using a stored lastTicks for TEST MODE ONLY?
-                // Or better: Just Restart() if no tick source, else different path.
-                // Existing tests likely use tick source.
-                // Let's assume standard Stopwatch behavior for Production logic:
-                rawDelta = _wallClock.ElapsedTicks;
-                _wallClock.Restart();
+                rawDelta = now - _lastUpdateTicks;
+                _lastUpdateTicks = now;
             }
             else
             {

@@ -30,7 +30,8 @@ namespace ModuleHost.Core.Time
             _eventBus = eventBus ?? throw new ArgumentNullException(nameof(eventBus));
             _slaveNodeIds = nodeIds ?? throw new ArgumentNullException(nameof(nodeIds));
             _config = config ?? TimeConfig.Default;
-            _pendingAcks = new HashSet<int>();
+            _pendingAcks = new HashSet<int>(_slaveNodeIds);
+            _waitingForAcks = true;
             
             // Register messaging
             _eventBus.Register<FrameOrderDescriptor>();
@@ -49,8 +50,12 @@ namespace ModuleHost.Core.Time
             var acks = _eventBus.Consume<FrameAckDescriptor>();
             foreach(var ack in acks) OnAckReceived(ack);
             
-            // In lockstep master, Update() just returns the current frozen time.
-            // Advancement happens ONLY via Step().
+            // In lockstep master, we automatically advance if all ACKs are received
+            if (!_waitingForAcks)
+            {
+                return Step(_config.FixedDeltaSeconds);
+            }
+            
             return GetCurrentTime();
         }
         

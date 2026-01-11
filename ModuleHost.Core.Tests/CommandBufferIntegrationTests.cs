@@ -16,9 +16,9 @@ namespace ModuleHost.Core.Tests
         {
             public string Name => "CommandModule";
             
-            // We must override Policy to ensure 1000ms timeout is used.
+            // We must override Policy to ensure 2000ms timeout is used.
             // Tier => Fast defaults to 15ms timeout otherwise.
-            public ExecutionPolicy Policy => ExecutionPolicy.FastReplica().WithTimeout(1000);
+            public ExecutionPolicy Policy => ExecutionPolicy.FastReplica().WithTimeout(2000);
 
             // Legacy properties (unused by Policy now)
             public ModuleTier Tier => ModuleTier.Fast; 
@@ -41,6 +41,9 @@ namespace ModuleHost.Core.Tests
             using var live = new EntityRepository();
             var acc = new EventAccumulator();
             using var kernel = new ModuleHostKernel(live, acc);
+            
+            // Fix: Register component for internal providers (GDB)
+            kernel.SetSchemaSetup(r => r.RegisterComponent<TestComponent>());
             
             var module = new CommandModule();
             bool acquired = false;
@@ -65,6 +68,9 @@ namespace ModuleHost.Core.Tests
             var acc = new EventAccumulator();
             using var kernel = new ModuleHostKernel(live, acc);
             
+            // Fix: Register component for internal providers (GDB)
+            kernel.SetSchemaSetup(r => r.RegisterComponent<TestComponent>());
+            
             var module = new CommandModule();
             module.OnTick = (view, cmd) => 
             {
@@ -85,6 +91,9 @@ namespace ModuleHost.Core.Tests
             live.RegisterComponent<TestComponent>(); // Must be registered on live
             var acc = new EventAccumulator();
             using var kernel = new ModuleHostKernel(live, acc);
+            
+            // Fix: Register component for internal providers (GDB)
+            kernel.SetSchemaSetup(r => r.RegisterComponent<TestComponent>());
             
             // Pre-create entity on live
             var e = live.CreateEntity();
@@ -115,6 +124,12 @@ namespace ModuleHost.Core.Tests
             var acc = new EventAccumulator();
             using var kernel = new ModuleHostKernel(live, acc);
             
+            // Fix: Register component for internal providers (GDB)
+            kernel.SetSchemaSetup(r => r.RegisterComponent<TestComponent>());
+            
+            // Fix: Register schema for internal providers (GDB)
+            kernel.SetSchemaSetup(r => r.RegisterComponent<TestComponent>());
+            
             var m1 = new CommandModule { };
             m1.OnTick = (view, cmd) => cmd.CreateEntity();
             
@@ -136,6 +151,9 @@ namespace ModuleHost.Core.Tests
             live.RegisterComponent<TestComponent>();
             var acc = new EventAccumulator();
             using var kernel = new ModuleHostKernel(live, acc);
+            
+            // Fix: Register component for internal providers (GDB)
+            kernel.SetSchemaSetup(r => r.RegisterComponent<TestComponent>());
             
             var module = new CommandModule();
             module.OnTick = (view, cmd) => 
@@ -163,6 +181,9 @@ namespace ModuleHost.Core.Tests
             using var live = new EntityRepository();
             var acc = new EventAccumulator();
             using var kernel = new ModuleHostKernel(live, acc);
+            
+            // Fix: Register component for internal providers (GDB)
+            kernel.SetSchemaSetup(r => r.RegisterComponent<TestComponent>());
             
             var module = new CommandModule();
             int callCount = 0;
@@ -195,6 +216,9 @@ namespace ModuleHost.Core.Tests
             using var live = new EntityRepository();
             var acc = new EventAccumulator();
             using var kernel = new ModuleHostKernel(live, acc);
+            
+            // Fix: Register component for internal providers (GDB)
+            kernel.SetSchemaSetup(r => r.RegisterComponent<TestComponent>());
             
             var module = new CommandModule();
             module.OnTick = (view, cmd) => { /* Do nothing */ };

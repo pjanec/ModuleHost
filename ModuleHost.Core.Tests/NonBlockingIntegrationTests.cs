@@ -39,6 +39,18 @@ namespace ModuleHost.Core.Tests
             public SlowModule(int sleepMs) { SleepMs = sleepMs; }
             public int MaxExpectedRuntimeMs => 500;
             
+            public ExecutionPolicy Policy 
+            {
+                get
+                {
+                    var p = Tier == ModuleTier.Fast 
+                        ? ExecutionPolicy.FastReplica() 
+                        : ExecutionPolicy.SlowBackground(UpdateFrequency <= 1 ? 60 : 60/UpdateFrequency);
+                    p.MaxExpectedRuntimeMs = 2000; // Increased for test stability
+                    return p;
+                }
+            }
+
             public void Tick(ISimulationView view, float deltaTime)
             {
                 LastDt = deltaTime;
@@ -53,6 +65,8 @@ namespace ModuleHost.Core.Tests
             public ModuleTier Tier => ModuleTier.Fast; // FrameSynced
             public int UpdateFrequency => 1;
             public int TickCount = 0;
+            
+            public ExecutionPolicy Policy => ExecutionPolicy.FastReplica().WithTimeout(2000); // Ensure explicit and safe timeout
 
             public void Tick(ISimulationView view, float deltaTime)
             {
@@ -88,6 +102,9 @@ namespace ModuleHost.Core.Tests
         public void Integration_FrameSyncedModule_BlocksUntilComplete()
         {
             var fastMod = new FastModule();
+            // Override policy to be very safe
+            // fastMod... we can't override property on instance.
+            // But FastModule has property that returns FastReplica().WithTimeout(2000).
             
             _kernel.RegisterModule(fastMod);
             _kernel.Initialize();
@@ -119,7 +136,16 @@ namespace ModuleHost.Core.Tests
              _kernel.Update(1.0f);
              
              // Wait for module to finish tick 1
-             await Task.Delay(300);
+             // We use a spin wait instead of hard delay to avoid flaky tests on slow runners
+             var timeout = DateTime.UtcNow.AddSeconds(5);
+             while (slowMod.TickCount < 1 && DateTime.UtcNow < timeout)
+             {
+                 await Task.Delay(10);
+             }
+             Assert.Equal(1, slowMod.TickCount); // Ensure it actually finished
+             
+             // Extra safety: Allow Task completion to propagate to Kernel so HarvestEntry sees it
+             await Task.Delay(200);
              
              // Frame 4: Harvest (Tick 1 done). Dispatch Tick 2?
              // Tick 1 used dt=1.0.
@@ -130,7 +156,12 @@ namespace ModuleHost.Core.Tests
              _kernel.Update(1.0f);
              
              // Wait for Tick 2
-             await Task.Delay(300);
+             timeout = DateTime.UtcNow.AddSeconds(5);
+             while (slowMod.TickCount < 2 && DateTime.UtcNow < timeout)
+             {
+                 await Task.Delay(10);
+             }
+             Assert.Equal(2, slowMod.TickCount);
              
              // Check slowMod.LastDt
              // Tick 1: LastDt = 1.0

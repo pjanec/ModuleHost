@@ -116,7 +116,7 @@ namespace ModuleHost.Core.Tests.Time
         [Fact]
         public void SteppingController_StepAdvancesTime()
         {
-            var state = new GlobalTime { TotalTime = 10.0, FrameNumber = 100 };
+            var state = new GlobalTime { TotalTime = 10.0, FrameNumber = 100, TimeScale = 1.0f };
             var controller = new SteppingTimeController(state);
             
             var time1 = controller.Step(0.1f);
