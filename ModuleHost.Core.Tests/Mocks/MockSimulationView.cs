@@ -96,6 +96,7 @@ namespace ModuleHost.Core.Tests.Mocks
         public List<ConstructionAck> Acks = new();
         public List<(Entity, Type)> RemovedComponents = new();
         public List<object> PublishedEvents = new();
+        public List<(Entity, object)> AddedManagedComponents = new();
 
         public void PublishEvent<T>(T ev) where T : unmanaged
         {
@@ -111,7 +112,12 @@ namespace ModuleHost.Core.Tests.Mocks
         public void DestroyEntity(Entity entity) { }
         public void SetLifecycleState(Entity entity, EntityLifecycle state) { }
         public void AddComponent<T>(Entity entity, T component) where T : unmanaged { }
-        public void AddManagedComponent<T>(Entity entity, T component) where T : class { }
+        
+        public void AddManagedComponent<T>(Entity entity, T component) where T : class 
+        {
+            AddedManagedComponents.Add((entity, component));
+        }
+        
         public void RemoveManagedComponent<T>(Entity entity) where T : class { }
     }
     

@@ -158,39 +158,57 @@ namespace ModuleHost.Core.Network.Systems
             
             // Determine ownership for each descriptor type
             // For now, we handle the standard descriptors: EntityState, EntityMaster, WeaponState
-            var descriptorTypeIds = new[] 
-            { 
-                NetworkConstants.ENTITY_MASTER_DESCRIPTOR_ID,
-                NetworkConstants.ENTITY_STATE_DESCRIPTOR_ID,
-                NetworkConstants.WEAPON_STATE_DESCRIPTOR_ID 
-            };
             
-            foreach (var descriptorTypeId in descriptorTypeIds)
+            // 1. EntityMaster (always single instance 0)
+            AssignDescriptorOwnership(descOwnership, NetworkConstants.ENTITY_MASTER_DESCRIPTOR_ID, request, 0);
+            
+            // 2. EntityState (always single instance 0)
+            AssignDescriptorOwnership(descOwnership, NetworkConstants.ENTITY_STATE_DESCRIPTOR_ID, request, 0);
+            
+            // 3. WeaponState (multi-instance)
+            int weaponInstanceCount = GetWeaponInstanceCount(request.DisType);
+            for (int i = 0; i < weaponInstanceCount; i++)
             {
-                // Ask strategy for initial owner (instanceId = 0 for now, multi-instance deferred)
-                int? strategyOwner = _ownershipStrategy.GetInitialOwner(
-                    descriptorTypeId,
-                    request.DisType,
-                    request.PrimaryOwnerId,
-                    instanceId: 0
-                );
-                
-                Console.WriteLine($"[DEBUG] Descriptor {descriptorTypeId}: Strategy returned {strategyOwner}, Primary {request.PrimaryOwnerId}");
-
-                int owner = strategyOwner ?? request.PrimaryOwnerId;
-                
-                // Only populate map if different from primary owner (saves memory)
-                if (owner != request.PrimaryOwnerId)
-                {
-                    long key = OwnershipExtensions.PackKey(descriptorTypeId, 0);
-                    descOwnership.Map[key] = owner;
-                    
-                    Console.WriteLine($"[NetworkSpawnerSystem] Entity {entity.Index}: Descriptor {descriptorTypeId} owned by node {owner} (partial ownership)");
-                }
+                AssignDescriptorOwnership(descOwnership, NetworkConstants.WEAPON_STATE_DESCRIPTOR_ID, request, i);
             }
             
             // Update component
             repo.SetManagedComponent(entity, descOwnership);
+        }
+        
+        private void AssignDescriptorOwnership(DescriptorOwnership descOwnership, long descriptorTypeId, NetworkSpawnRequest request, int instanceId)
+        {
+            // Ask strategy for initial owner
+            int? strategyOwner = _ownershipStrategy.GetInitialOwner(
+                descriptorTypeId,
+                request.DisType,
+                request.PrimaryOwnerId,
+                instanceId: instanceId
+            );
+            
+            int owner = strategyOwner ?? request.PrimaryOwnerId;
+            
+            // Only populate map if different from primary owner (saves memory)
+            if (owner != request.PrimaryOwnerId)
+            {
+                long key = OwnershipExtensions.PackKey(descriptorTypeId, instanceId);
+                descOwnership.Map[key] = owner;
+                
+                Console.WriteLine($"[NetworkSpawnerSystem] Descriptor {descriptorTypeId}:{instanceId} owned by node {owner} (partial ownership)");
+            }
+        }
+
+        private int GetWeaponInstanceCount(DISEntityType type)
+        {
+            // Simple heuristic: Could be configured via TKB template metadata
+            // For now, hardcode based on entity kind
+            switch (type.Kind)
+            {
+                case 1: // Platform/Tank
+                    return type.Category == 1 ? 2 : 1; // Main battle tank = 2 weapons, others = 1
+                default:
+                    return 0; // No weapons
+            }
         }
         
         private int GetTemplateId(string templateName)

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using Fdp.Kernel;
 using ModuleHost.Core.Abstractions;
+using ModuleHost.Core.Network.Messages;
 
 namespace ModuleHost.Core.Network
 {
@@ -81,6 +82,27 @@ namespace ModuleHost.Core.Network
     /// bypassing normal change detection. Used for ownership transfer confirmations.
     /// </summary>
     public struct ForceNetworkPublish { }
+
+    /// <summary>
+    /// Weapon state component storing multi-instance weapon data.
+    /// Multiple weapons stored as dictionary keyed by instance ID.
+    /// </summary>
+    public class WeaponStates
+    {
+        /// <summary>
+        /// Maps weapon instance ID -> weapon state.
+        /// Instance 0 = primary weapon, Instance 1+ = secondary weapons.
+        /// </summary>
+        public Dictionary<long, WeaponState> Weapons { get; set; } = new();
+    }
+
+    public struct WeaponState
+    {
+        public float AzimuthAngle;
+        public float ElevationAngle;
+        public int AmmoCount;
+        public WeaponStatus Status;
+    }
 
     /// <summary>
     /// Event emitted when descriptor ownership changes (via OwnershipUpdate message).
@@ -183,11 +205,5 @@ namespace ModuleHost.Core.Network
     public struct NetworkIdentity
     {
         public long Value;
-    }
-    
-    // === EXAMPLE COMPONENT FOR TESTS ===
-    public struct WeaponAmmo
-    {
-        public int Current;
     }
 }
