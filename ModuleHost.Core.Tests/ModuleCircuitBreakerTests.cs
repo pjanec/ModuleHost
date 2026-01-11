@@ -142,7 +142,7 @@ namespace ModuleHost.Core.Tests
         }
         
         [Fact]
-        public void CircuitBreaker_ThreadSafe_ConcurrentAccess()
+        public async Task CircuitBreaker_ThreadSafe_ConcurrentAccess()
         {
             var breaker = new ModuleCircuitBreaker(failureThreshold: 100);
             
@@ -161,14 +161,14 @@ namespace ModuleHost.Core.Tests
                 });
             }
             
-            Task.WaitAll(tasks);
+            await Task.WhenAll(tasks);
             
             // Should have recorded 100 failures total
             Assert.Equal(100, breaker.FailureCount);
         }
 
         [Fact]
-        public void CircuitBreaker_ConcurrentStateTransition_ThreadSafe()
+        public async Task CircuitBreaker_ConcurrentStateTransition_ThreadSafe()
         {
             var breaker = new ModuleCircuitBreaker(failureThreshold: 2, resetTimeoutMs: 100);
             
@@ -206,7 +206,7 @@ namespace ModuleHost.Core.Tests
                 });
             }
             
-            Task.WaitAll(tasks);
+            await Task.WhenAll(tasks);
             
             // Circuit should end in a valid state (not corrupted)
             var finalState = breaker.State;

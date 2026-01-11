@@ -52,10 +52,88 @@ namespace ModuleHost.Core.Network
     }
     
     /// <summary>
+    /// Transient component added by EntityMasterTranslator when a new EntityMaster
+    /// descriptor arrives. Consumed by NetworkSpawnerSystem in the same frame.
+    /// </summary>
+    public struct NetworkSpawnRequest
+    {
+        /// <summary>DIS entity type from EntityMaster descriptor</summary>
+        public DISEntityType DisType;
+        
+        /// <summary>Primary owner node ID (EntityMaster owner)</summary>
+        public int PrimaryOwnerId;
+        
+        /// <summary>Master flags (ReliableInit, etc.)</summary>
+        public MasterFlags Flags;
+        
+        /// <summary>Network entity ID for mapping</summary>
+        public long NetworkEntityId;
+    }
+
+    /// <summary>
+    /// Transient tag component for entities awaiting network acknowledgment
+    /// in reliable initialization mode. Removed after publishing lifecycle status.
+    /// </summary>
+    public struct PendingNetworkAck { }
+
+    /// <summary>
+    /// Tag component to force immediate network publication of owned descriptors,
+    /// bypassing normal change detection. Used for ownership transfer confirmations.
+    /// </summary>
+    public struct ForceNetworkPublish { }
+
+    /// <summary>
+    /// Event emitted when descriptor ownership changes (via OwnershipUpdate message).
+    /// Allows modules to react to ownership transfers.
+    /// </summary>
+    [EventId(9010)]
+    public struct DescriptorAuthorityChanged
+    {
+        public Entity Entity;
+        public long DescriptorTypeId;
+        
+        /// <summary>True if this node acquired ownership, false if lost</summary>
+        public bool IsNowOwner;
+        
+        /// <summary>New owner node ID</summary>
+        public int NewOwnerId;
+    }
+
+    /// <summary>
     /// Helper extension methods to simplify ownership checks.
     /// </summary>
     public static class OwnershipExtensions
     {
+        /// <summary>
+        /// Packs descriptor type ID and instance ID into a single long key.
+        /// Format: [TypeId: bits 63-32][InstanceId: bits 31-0]
+        /// </summary>
+        public static long PackKey(long descriptorTypeId, long instanceId)
+        {
+            return (descriptorTypeId << 32) | (uint)instanceId;
+        }
+
+        /// <summary>
+        /// Unpacks a composite key into descriptor type ID and instance ID.
+        /// </summary>
+        public static (long TypeId, long InstanceId) UnpackKey(long packedKey)
+        {
+            long typeId = packedKey >> 32;
+            long instanceId = (uint)(packedKey & 0xFFFFFFFF);
+            return (typeId, instanceId);
+        }
+
+        /// <summary>
+        /// Overload of OwnsDescriptor that accepts separate typeId and instanceId.
+        /// Packs them internally before lookup.
+        /// </summary>
+        public static bool OwnsDescriptor(this ISimulationView view, Entity entity, 
+            long descriptorTypeId, long instanceId)
+        {
+            long packedKey = PackKey(descriptorTypeId, instanceId);
+            return OwnsDescriptor(view, entity, packedKey);
+        }
+
         public static bool OwnsDescriptor(this ISimulationView view, Entity entity, long descriptorTypeId)
         {
             if (!view.HasComponent<NetworkOwnership>(entity)) return false;

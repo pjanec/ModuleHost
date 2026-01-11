@@ -96,7 +96,7 @@ namespace ModuleHost.Core.Tests
         }
 
         [Fact]
-        public void SnapshotPool_ThreadSafe_ConcurrentAccess()
+        public async Task SnapshotPool_ThreadSafe_ConcurrentAccess()
         {
             var pool = new SnapshotPool(null, warmupCount: 10);
             
@@ -111,7 +111,7 @@ namespace ModuleHost.Core.Tests
                 }
             }));
             
-            Task.WaitAll(tasks.ToArray());
+            await Task.WhenAll(tasks);
             
             // Assert: No crashes, pool functional
             Assert.True(pool.PooledCount > 0);
