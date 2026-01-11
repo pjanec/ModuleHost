@@ -31,7 +31,7 @@ namespace ModuleHost.Core.ELM
         /// IDs of modules that participate in lifecycle coordination.
         /// Entity becomes Active when all modules ACK.
         /// </summary>
-        private readonly HashSet<int> _participatingModuleIds;
+        private HashSet<int> _participatingModuleIds;
         
         /// <summary>
         /// Timeout in frames before giving up on pending entity.
@@ -55,13 +55,6 @@ namespace ModuleHost.Core.ELM
         {
             _participatingModuleIds = new HashSet<int>(participatingModuleIds);
             _timeoutFrames = timeoutFrames;
-            
-            if (_participatingModuleIds.Count == 0)
-            {
-                throw new ArgumentException(
-                    "At least one participating module required", 
-                    nameof(participatingModuleIds));
-            }
         }
         
         public void RegisterSystems(ISystemRegistry registry)
@@ -75,6 +68,26 @@ namespace ModuleHost.Core.ELM
         }
         
         // === Public API ===
+        
+        public void RegisterModule(int moduleId)
+        {
+            _participatingModuleIds.Add(moduleId);
+        }
+
+        public void UnregisterModule(int moduleId)
+        {
+            _participatingModuleIds.Remove(moduleId);
+        }
+
+        public void AcknowledgeConstruction(Entity entity, int moduleId, uint frame, IEntityCommandBuffer cmd)
+        {
+            cmd.PublishEvent(new ConstructionAck
+            {
+                Entity = entity,
+                ModuleId = moduleId,
+                Success = true
+            });
+        }
         
         /// <summary>
         /// Begins construction of a new entity.
